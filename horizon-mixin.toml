@@ -1,0 +1,53 @@
+[mod]
+id = "horizonvc"
+version = "0.1.0"
+
+[compatibility]
+horizon_revision = "b13dbf0687b545431172466ab4b91d19c3976405"
+
+# The trait-mod half: `custom_payload_from_client` (a player's voicechat:* payload) and
+# `player_register_channels` (a client's voicechat:* channels), handed to the core.
+[api]
+path = "bridge"
+
+# Protocol, state and the UDP voice thread.
+[[crate]]
+id = "core"
+path = "core"
+dependent = "horizon-client"
+
+# Once a server tick (at its end): the players' positions go to the voice thread and the mod's
+# payloads (hooks-all: `native_send_custom_payload_to_player`), chat lines and kicks
+# (hooks-b-all: `native_kick`) go out.
+[[injection]]
+id = "tick-flush"
+hook = "server_tick"
+hook_version = 1
+kind = "HEAD"
+helper = "flush.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "phase", ty = "horizon_client::mod_api::ServerTickPhase", value = "phase" },
+]
+
+# /horizonvc help|test|invite|join|leave (stable hook points).
+[[injection]]
+id = "register"
+hook = "register_commands"
+hook_version = 1
+kind = "HEAD"
+helper = "register.rs"
+bindings = [{ name = "commands", ty = "&mut Vec<crate::game::native_server::NativeCommand>", value = "commands" }]
+
+[[injection]]
+id = "perform"
+hook = "perform_command"
+hook_version = 1
+kind = "HEAD"
+helper = "perform.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "player", ty = "&crate::game::native_server::NativeServerPlayer", value = "player" },
+  { name = "command", ty = "&str", value = "command" },
+  { name = "ran", ty = "&mut bool", value = "ran" },
+]

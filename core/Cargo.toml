@@ -1,0 +1,12 @@
+[package]
+name = "horizonvc-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Voice chat server for Horizon, compatible with the Simple Voice Chat client mod (clean-room)"
+
+[dependencies]
+# AES-128-GCM for the voice datagrams and the random source for secrets and nonces.
+ring = "0.17"
+# The game's log (Horizon's logger takes the `log` facade).
+log = "0.4"

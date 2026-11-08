@@ -1,0 +1,13 @@
+[package]
+name = "mod-horizonvc"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "HorizonVC's trait-mod half: the inbound plugin channel payloads and the client channel registration, handed to the core"
+
+# `horizonvc-core` is the crate in ../core; the launcher builds it as part of the bundle.
+[dependencies]
+horizonvc-core = { path = "../core" }
+
+# The launcher points this at the Horizon source it builds the game from.
+horizon-client = { git = "https://github.com/horizon-rust/horizon", rev = "a589a3dd9be04fa7f17667c0175711aaa92e1147" }

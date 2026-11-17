@@ -59,24 +59,26 @@ the first start ([core/horizonvc-server.properties](core/horizonvc-server.proper
 
 ## Build
 
-A horizon-mixins bundle (this folder) with one crate (`core`, std + `ring` + `log`, all in
-Horizon's `Cargo.lock`), a trait-mod bridge (`bridge/`, the payload hook) and three injections:
+The mod follows the layout of the horizon-mods registry: `compatibility.json` names the Horizon commit and the
+horizon-mixins commit, and the bundle is `mixins/horizonvc/`: one crate (`core`, std + `ring` + `log`, all in
+Horizon's `Cargo.lock`) and four injections (`payload.rs`, `flush.rs`, `register.rs`, `perform.rs`). From a clone of
+[horizon-mods](https://github.com/horizon-rust/horizon-mods):
 
 ```sh
-horizon-mixins apply --workspace <horizon source> --mods <folder containing this bundle> --out <stage>
-cd <stage> && cargo build --profile fast -p horizon-client --no-default-features --locked
+python3 native/tools/native.py check /path/to/horizon-vc
+python3 native/tools/native.py check /path/to/horizon-vc --horizon latest
+python3 native/tools/native.py package /path/to/horizon-vc
 ```
 
-`horizon_revision` in `horizon-mixin.toml` pins the Horizon commit it targets. Unit tests: `cargo test`
-in `core/` (with Horizon's `Cargo.lock` copied next to it, to get the same crate versions).
+`horizon_revision` in `compatibility.json` and in `mixins/horizonvc/horizon-mixin.toml` pins the Horizon commit it
+targets (both must be the same). Unit tests: `cargo test` in `mixins/horizonvc/core/` (the crate ships no
+`Cargo.lock`; copy Horizon's next to it to get the same crate versions).
 
-The bridge takes `custom_payload_from_client` (a player's `voicechat:*` payload). The mixin's
-`server_tick` injection (`flush.rs`) uses `native_server_players`, `native_player_channels`,
-`native_send_custom_payload_to_player`, `native_tell` and `native_kick`; the last two outbound ones
-and `custom_payload_from_client` / `player_channels` are pending API fragments in Horizon. The
-commands use the hook points `register_commands` v1 and `perform_command` v1 (`register.rs`,
-`perform.rs`). The engine glue has not been built against a Horizon checkout yet; the core crate's
-unit tests run.
+The injection on `native_custom_payload_from_client` hears a player's `voicechat:*` payload. The tick injection
+(`flush.rs`) uses `native_server_players`, `native_player_channels`, `native_send_custom_payload_to_player`,
+`native_tell` and `native_kick`. The commands use the hook points `register_commands` v1 and `perform_command` v1
+(`register.rs`, `perform.rs`). The engine glue type-checks on the Horizon commit named above (`native.py check`);
+it has not been run in a game yet, the core crate's unit tests run.
 
 ## Testing
 

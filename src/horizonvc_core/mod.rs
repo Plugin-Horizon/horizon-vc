@@ -7,8 +7,10 @@
 pub mod config;
 pub mod crypto;
 pub mod packets;
+pub mod properties;
 pub mod routing;
 pub mod server;
+pub mod translations;
 pub mod wire;
 
 pub use server::{

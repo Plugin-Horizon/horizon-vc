@@ -1,0 +1,14 @@
+[package]
+name = "mod-voicechat"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+# The pinned SDK's API crate, fetched into .horizon/sdk/ by any `cargo horizon-mod` command.
+horizon-mod-api = { path = ".horizon/sdk/api/crates/horizon-mod-api" }
+# AES-128-GCM for the voice datagrams and the random source for secrets and nonces.
+ring = "0.17"
+# The game's log (Horizon's logger takes the `log` facade).
+log = "0.4"
+

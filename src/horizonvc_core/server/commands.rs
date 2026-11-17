@@ -1,35 +1,43 @@
-//! `/horizonvc help|test|invite|join|leave`, with its alias `/hvc`.
+//! `/voicechat help|test|invite|join|leave` (the original's command name), with the aliases `/horizonvc` and `/hvc`.
 use super::{Join, Out, State};
 
 /// The usages to register, with the operator level each needs to be seen (0: everyone). `test` needs
 /// `horizonvc.admin`, checked when it runs.
-pub const USAGES: [(&str, u8); 12] = [
+pub const USAGES: [(&str, u8); 18] = [
+    ("voicechat", 0),
+    ("voicechat help", 0),
+    ("voicechat test <player:player>", 0),
+    ("voicechat invite <player:player>", 0),
+    ("voicechat join <group:word> [password:text]", 0),
+    ("voicechat leave", 0),
     ("horizonvc", 0),
     ("horizonvc help", 0),
-    ("horizonvc test <player:player>", 1),
+    ("horizonvc test <player:player>", 0),
     ("horizonvc invite <player:player>", 0),
     ("horizonvc join <group:word> [password:text]", 0),
     ("horizonvc leave", 0),
     ("hvc", 0),
     ("hvc help", 0),
-    ("hvc test <player:player>", 1),
+    ("hvc test <player:player>", 0),
     ("hvc invite <player:player>", 0),
     ("hvc join <group:word> [password:text]", 0),
     ("hvc leave", 0),
 ];
 
-/// Whether the first word of a command line is `/horizonvc` or its alias `/hvc`.
+/// Whether the first word of a command line is `/voicechat` or one of its aliases `/horizonvc`, `/hvc`.
 pub fn is_command_word(word: &str) -> bool {
-    word.eq_ignore_ascii_case("horizonvc") || word.eq_ignore_ascii_case("hvc")
+    ["voicechat", "horizonvc", "hvc"]
+        .iter()
+        .any(|name| word.eq_ignore_ascii_case(name))
 }
 
 const HELP: [&str; 6] = [
-    "/horizonvc help - List these commands (alias /hvc)",
-    "/horizonvc test <player> - Check whether a player's voice chat is connected",
-    "/horizonvc invite <player> - Send a player a link to your group",
-    "/horizonvc join <group> [password] - Join the group of that name",
-    "/horizonvc join <group id> - Join the group with that ID",
-    "/horizonvc leave - Leave your current group",
+    "/voicechat help - List these commands (aliases /horizonvc, /hvc)",
+    "/voicechat test <player> - Check whether a player's voice chat is connected",
+    "/voicechat invite <player> - Send a player a link to your group",
+    "/voicechat join <group> [password] - Join the group of that name",
+    "/voicechat join <group id> - Join the group with that ID",
+    "/voicechat leave - Leave your current group",
 ];
 
 /// `8-4-4-4-12` hex digits.
@@ -61,7 +69,7 @@ impl State {
             .map(|(u, _)| *u)
     }
 
-    /// A player's command line (without its slash); `None` when it isn't `/horizonvc`. Lines for other players
+    /// A player's command line (without its slash); `None` when it isn't `/voicechat`. Lines for other players
     /// go to the outbox.
     pub fn command(&mut self, player: u128, line: &str) -> Option<Vec<String>> {
         let mut words = line.split_whitespace();
@@ -76,9 +84,7 @@ impl State {
             Some(s) => s.to_string(),
         };
         if !self.voicers.contains_key(&player) {
-            return reply(
-                "This command needs the Simple Voice Chat client mod, which your client has not reported.",
-            );
+            return reply(&self.texts.command_needed());
         }
         match (sub.as_str(), &args[..]) {
             ("test", [name]) => {
@@ -122,7 +128,7 @@ impl State {
                         "{} invited you to the group {group_name}. [Click to join]",
                         self.online[&player].name
                     ),
-                    command: format!("/horizonvc join {}", uuid_string(group)),
+                    command: format!("/voicechat join {}", uuid_string(group)),
                 });
                 reply(&format!("Invited {target_name} to {group_name}."))
             }

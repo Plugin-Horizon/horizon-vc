@@ -1,7 +1,7 @@
 //! The two halves of the protocol: plugin channel payloads (over the game connection) and
 //! the packets inside the encrypted voice datagrams. The layouts are those the client mod
 //! expects; they were worked out clean-room (see the README).
-use crate::wire::{Reader, Result, Writer};
+use crate::horizonvc_core::wire::{Reader, Result, Writer};
 
 /// The protocol compatibility number of the client mod (2.6.x) and the only one a secret request is
 /// answered for.
@@ -507,8 +507,8 @@ mod tests {
         let secret = [7u8; 16];
         let mut w = Writer::default();
         w.u8(id::MIC).bytes(&[4, 5]).i64(1).bool(true);
-        let sealed = crate::crypto::seal(&secret, &w.0);
-        let plain = crate::crypto::open(&secret, &sealed).expect("opens with its secret");
+        let sealed = crate::horizonvc_core::crypto::seal(&secret, &w.0);
+        let plain = crate::horizonvc_core::crypto::open(&secret, &sealed).expect("opens with its secret");
         assert_eq!(
             Voice::decode(&plain, 1024),
             Ok(Voice::Mic {
@@ -517,6 +517,6 @@ mod tests {
                 whispering: true
             })
         );
-        assert!(crate::crypto::open(&[8u8; 16], &sealed).is_none());
+        assert!(crate::horizonvc_core::crypto::open(&[8u8; 16], &sealed).is_none());
     }
 }

@@ -15,5 +15,5 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: cargo test (core)
-        working-directory: core
+        working-directory: mixins/horizonvc/core
         run: cargo test

@@ -116,7 +116,7 @@ pub fn set_group(player: u128, group: Option<u128>) -> bool {
     .unwrap_or(false)
 }
 
-/// Lets a permissions mod answer `horizonvc.listen`, `.speak`, `.groups` and `.admin`.
+/// Lets a permissions mod answer `voicechat.listen`, `.speak`, `.groups` and `.admin`.
 pub fn set_permission_check(check: PermissionCheck) {
     with_state(|s| s.permissions = check);
 }

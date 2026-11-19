@@ -36,13 +36,13 @@ pub struct Guest<'a> {
     pub has_mod: bool,
 }
 
-/// Asks whether a player has a permission node (`horizonvc.listen`, `horizonvc.speak`, `horizonvc.groups`,
-/// `horizonvc.admin`), given their operator level. Another mod (a permissions mod) can set its own.
+/// Asks whether a player has a permission node (`voicechat.listen`, `voicechat.speak`, `voicechat.groups`,
+/// `voicechat.admin`), given their operator level. Another mod (a permissions mod) can set its own.
 pub type PermissionCheck = fn(player: u128, level: u8, node: &str) -> bool;
 
-/// Defaults: everyone listens, speaks and uses groups; `horizonvc.admin` is for operators.
+/// Defaults: everyone listens, speaks and uses groups; `voicechat.admin` is for operators.
 pub fn default_permissions(_player: u128, level: u8, node: &str) -> bool {
-    node != "horizonvc.admin" || level >= 1
+    node != "voicechat.admin" || level >= 1
 }
 
 /// Hears a player's microphone packet before it is routed: the speaker, the Opus data, whether they whisper.
@@ -367,7 +367,7 @@ impl State {
                 self.voicers.get_mut(&player).unwrap().disabled = disabled;
                 self.broadcast_state(player);
             }
-            _ if !self.cfg.enable_groups || !self.may(player, "horizonvc.groups") => {}
+            _ if !self.cfg.enable_groups || !self.may(player, "voicechat.groups") => {}
             FromClient::CreateGroup {
                 name,
                 password,
@@ -502,7 +502,7 @@ impl State {
                 let silenced_spectator = !self.cfg.spectator_interaction
                     && self.online.get(&uuid).is_some_and(|o| o.spectator);
                 if !silenced_spectator
-                    && self.may(uuid, "horizonvc.speak")
+                    && self.may(uuid, "voicechat.speak")
                     && !self
                         .mic_listeners
                         .iter()
@@ -522,7 +522,7 @@ impl State {
     }
 
     /// An online player as routing sees them, with or without the mod (an API audio sender speaks for a player
-    /// without it). A player without `horizonvc.listen` counts as having their voice chat off.
+    /// without it). A player without `voicechat.listen` counts as having their voice chat off.
     fn view(&self, uuid: u128) -> Option<Listener<'_>> {
         let o = self.online.get(&uuid)?;
         let v = self.voicers.get(&uuid);
@@ -534,7 +534,7 @@ impl State {
             uuid,
             dimension: &o.dimension,
             pos: o.pos,
-            disabled: v.is_some_and(|v| v.disabled) || !self.may(uuid, "horizonvc.listen"),
+            disabled: v.is_some_and(|v| v.disabled) || !self.may(uuid, "voicechat.listen"),
             group,
         })
     }
@@ -989,6 +989,21 @@ mod tests {
             s.command(B, "horizonvc test a"),
             Some(vec!["A is connected to voice chat.".into()])
         );
+        // Group names may contain spaces and match case-insensitively; the words after the name are the password.
+        s.leave(B);
+        s.groups[0].name = "my team".into();
+        assert_eq!(
+            s.command(B, "voicechat join my team"),
+            Some(vec!["Wrong password.".into()])
+        );
+        assert_eq!(
+            s.command(B, "voicechat join My Team pw"),
+            Some(vec!["You joined the group my team.".into()])
+        );
+        assert_eq!(
+            s.command(B, "voicechat join nothing here"),
+            Some(vec!["Group nothing not found.".into()])
+        );
         assert_eq!(s.command(B, "gamemode 1"), None);
         assert_eq!(s.command(B, "horizonvc").unwrap().len(), 6);
         assert_eq!(s.command(B, "hvc").unwrap().len(), 6);
@@ -1011,7 +1026,7 @@ mod tests {
         s.leave(A);
         assert_eq!(s.groups.len(), 1);
         fn mute_a(player: u128, _: u8, node: &str) -> bool {
-            !(player == A && node == "horizonvc.speak")
+            !(player == A && node == "voicechat.speak")
         }
         s.permissions = mute_a;
         let mut mic = vec![id::MIC, 1, 7];

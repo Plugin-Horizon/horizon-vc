@@ -43,17 +43,17 @@ fn log(line: &str) {
     eprintln!("[HorizonVC] {line}");
 }
 
-/// The `horizonvc.*` nodes the engine's permission provider (LuckPerms) is asked for.
-const NODES: [&str; 4] = ["horizonvc.admin", "horizonvc.listen", "horizonvc.speak", "horizonvc.groups"];
+/// The `voicechat.*` nodes (the documented names) the engine's permission provider (LuckPerms) is asked for.
+const NODES: [&str; 4] = ["voicechat.admin", "voicechat.listen", "voicechat.speak", "voicechat.groups"];
 
 /// A voice chat node as a typed Boolean permission node.
 fn typed_node(name: &str) -> mod_api::PermissionNode {
     mod_api::PermissionNode::new(name, mod_api::PermissionValueType::Boolean)
 }
 
-/// The operator level that grants a node by default: `horizonvc.admin` from level 1, the others to everyone.
+/// The operator level that grants a node by default: `voicechat.admin` from level 1, the others to everyone.
 fn default_level(name: &str) -> mod_api::PermissionLevel {
-    mod_api::PermissionLevel::from_level(i32::from(name == "horizonvc.admin"))
+    mod_api::PermissionLevel::from_level(i32::from(name == "voicechat.admin"))
 }
 
 /// The engine's answers per player, read in `run_mod_command` (which has the host) for the core's
@@ -61,7 +61,7 @@ fn default_level(name: &str) -> mod_api::PermissionLevel {
 static NODE_ANSWERS: std::sync::Mutex<Vec<(u128, &'static str, bool)>> = std::sync::Mutex::new(Vec::new());
 
 /// The core's permission check: the provider's answer read for this player, else the core's default
-/// (`horizonvc.admin` needs operator level 1, the other nodes are everyone's).
+/// (`voicechat.admin` needs operator level 1, the other nodes are everyone's).
 fn node_answer(player: u128, level: u8, node: &str) -> bool {
     if let Ok(answers) = NODE_ANSWERS.lock() {
         if let Some((_, _, answer)) = answers.iter().find(|(p, n, _)| *p == player && *n == node) {
@@ -192,7 +192,13 @@ impl Hooks for Mod {
 
     fn register_commands(&self, _: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
         for (usage, level) in USAGES {
-            event.commands.push(Command::op(usage, level));
+            let command = Command::op(usage, level);
+            // `test` is for `voicechat.admin`: the node decides who sees and runs it when a provider is set.
+            event.commands.push(if usage.contains(" test ") {
+                command.with_node(&typed_node("voicechat.admin"))
+            } else {
+                command
+            });
         }
     }
 

@@ -25,13 +25,13 @@ groups. It speaks protocol compatibility version 20 (client mod 2.6.x).
 - Player states: joined, voice connected/disconnected, disabled, group; removed on leave.
 - Commands `/horizonvc` (alias `/hvc`): `help`, `test <player>` (operators), `invite <player>`
   (a clickable line that runs `/horizonvc join <group id>`; the invitation stands in for the
-  password once), `join <group name> [password]` (refused when more than one group has that name),
+  password once), `join <group name> [password]` (the name may contain spaces and matches case-insensitively; refused when more than one group has that name),
   `join <group id>`, `leave`.
 - `force_voice_chat` with `login_timeout`: a player whose client has not asked for a voice secret
   within the timeout is kicked.
-- Permissions `horizonvc.listen`, `horizonvc.speak`, `horizonvc.groups`, `horizonvc.admin`
-  (default: everyone; `admin` for operators). Horizon has no permission system, so another mod can
-  answer them through `api::set_permission_check`. A player without `listen` hears nothing, one
+- Permissions `voicechat.listen`, `voicechat.speak`, `voicechat.groups`, `voicechat.admin`
+  (the documented Simple Voice Chat names; default: everyone, `admin` for operators). They are declared as typed
+  permission nodes, so a permissions mod such as LuckPerms answers them (the old `horizonvc.*` names are gone). A player without `listen` hears nothing, one
   without `speak` is not routed, one without `groups` cannot create or join groups.
 - A Rust API for other mods (`horizonvc_core::api`): `connection_of`, `groups`, `create_group`
   (with persistent groups, which stay when empty), `remove_group`, `set_group`,
@@ -59,26 +59,9 @@ the first start ([core/horizonvc-server.properties](core/horizonvc-server.proper
 
 ## Build
 
-The mod follows the layout of the horizon-mods registry: `compatibility.json` names the Horizon commit and the
-horizon-mixins commit, and the bundle is `mixins/horizonvc/`: one crate (`core`, std + `ring` + `log`, all in
-Horizon's `Cargo.lock`) and four injections (`payload.rs`, `flush.rs`, `register.rs`, `perform.rs`). From a clone of
-[horizon-mods](https://github.com/horizon-rust/horizon-mods):
-
-```sh
-python3 native/tools/native.py check /path/to/horizon-vc
-python3 native/tools/native.py check /path/to/horizon-vc --horizon latest
-python3 native/tools/native.py package /path/to/horizon-vc
-```
-
-`horizon_revision` in `compatibility.json` and in `mixins/horizonvc/horizon-mixin.toml` pins the Horizon commit it
-targets (both must be the same). Unit tests: `cargo test` in `mixins/horizonvc/core/` (the crate ships no
-`Cargo.lock`; copy Horizon's next to it to get the same crate versions).
-
-The injection on `native_custom_payload_from_client` hears a player's `voicechat:*` payload. The tick injection
-(`flush.rs`) uses `native_server_players`, `native_player_channels`, `native_send_custom_payload_to_player`,
-`native_tell` and `native_kick`. The commands use the hook points `register_commands` v1 and `perform_command` v1
-(`register.rs`, `perform.rs`). The engine glue type-checks on the Horizon commit named above (`native.py check`);
-it has not been run in a game yet, the core crate's unit tests run.
+A native Horizon mod: `horizon-mod.toml` plus this crate (`src/lib.rs` is the mod, `src/horizonvc_core/` the
+protocol core). Unit tests: `cargo test`. It uses the mod API for raw `voicechat:*` payloads, the tick, commands and
+typed permission nodes; it has not been run with a real client yet.
 
 ## Testing
 

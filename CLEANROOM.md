@@ -12,7 +12,7 @@ Contains no code from the original. The original's source, jar and forks were ne
 | 2026-11-20 | https://modrepo.de/minecraft/voicechat/wiki/commands | Command list (`help`, `test`, `invite`, `join <name>`, `join <id>`, `leave`), the `voicechat.admin` node on `test`, the rule that commands run in-game only. |
 | 2026-11-20 | https://modrepo.de/minecraft/voicechat/wiki/permissions | Permission node names (`voicechat.listen`, `voicechat.speak`, `voicechat.groups`, `voicechat.admin`) and their defaults. |
 
-Earlier rounds used the same pages (see the audit notes in `/home/leo/horizon-wt/audit/voicechat.md`).
+Earlier rounds used the same pages (see the audit notes in the audit notes).
 
 ## Not in the public docs (so not implemented)
 

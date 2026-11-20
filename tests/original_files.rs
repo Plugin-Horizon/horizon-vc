@@ -8,8 +8,8 @@ fn fixture(name: &str) -> std::path::PathBuf {
 }
 
 #[test]
-fn every_one_of_the_18_original_keys_is_read() {
-    assert_eq!(ORIGINAL_KEYS.len(), 18);
+fn every_one_of_the_19_original_keys_is_read() {
+    assert_eq!(ORIGINAL_KEYS.len(), 19);
     let c = Config::read_original(&fixture("voicechat-server.properties")).unwrap();
     assert_eq!(c.port, 24460);
     assert_eq!(c.bind_address, "*");

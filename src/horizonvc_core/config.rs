@@ -16,8 +16,8 @@ pub fn original_path() -> Option<&'static str> {
     [ORIGINAL_PATH, LOADER_PATH].into_iter().find(|p| Path::new(p).is_file())
 }
 
-/// The 18 keys of the original `voicechat-server.properties`, in its order. `check_original` reports against these.
-pub const ORIGINAL_KEYS: [&str; 18] = [
+/// The 19 keys of the original `voicechat-server.properties`, in its order. `check_original` reports against these.
+pub const ORIGINAL_KEYS: [&str; 19] = [
     "port",
     "bind_address",
     "max_voice_distance",
@@ -35,6 +35,7 @@ pub const ORIGINAL_KEYS: [&str; 18] = [
     "login_timeout",
     "broadcast_range",
     "allow_pings",
+    "use_natives",
     "threaded_server_support",
 ];
 

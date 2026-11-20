@@ -1,5 +1,11 @@
 # HorizonVC
 
+## Port status
+
+Compared with Simple Voice Chat, server side (documentation only) (estimate): **81 %** of the original's commands, permissions, config keys, messages and features work today; **81 %** once our open Horizon PRs are merged; **81 %** with the engine changes we are writing; **81 %** with the newest Horizon SDK. Estimated count: ~30/~37 items. Status: not yet compiled after the 2026-11-20 round.
+
+Clean-room reimplementation from public docs.
+
 A voice chat server for [Horizon](https://github.com/horizon-rust/horizon), the Rust server for
 Minecraft 26.3, written as a native Horizon mod.
 

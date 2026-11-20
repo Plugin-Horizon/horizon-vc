@@ -1,4 +1,18 @@
-Parity: before ~75% -> after ~81% (~30/~37 items; method: audit + PARITY.md estimate; items = commands, nodes, config keys, features; clean room, docs only)
+Parity: ~81% now / ~81% with our PRs (~30/~37 items; method: audit + PARITY.md estimate; items = commands, nodes, config keys, features; clean room, docs only)
+
+## Checklist round 100 (blind, not compiled; docs only, 2026-11-20)
+Walked the public wiki pages (Commands, Server Config, Permissions; see CLEANROOM.md). Ticked:
+- [x] Commands `help`, `test`, `invite`, `join <name>`, `join <id>`, `leave`: names, args, `voicechat.admin` on `test`.
+- [x] Command root `/voicechat` as documented; `/horizonvc`, `/hvc` are extra aliases (kept).
+- [x] Console: the docs say commands run in-game only; the port answers them only for a player with the mod.
+- [x] Permission nodes `voicechat.listen|speak|groups|admin` (defaults as the docs).
+- [x] Server config keys: all 19 documented keys are read, with their defaults (`use_natives` was missing from the key list; added).
+- [x] Config file and translations location (`plugins/voicechat/`, `config/voicechat/`).
+- [ ] `spectator_player_possession`: API-blocked (spectated entity, GAPS_UPSTREAM).
+- [ ] `allow_pings`: the external ping packet is not in the public docs.
+- [ ] Hidden groups and the add_group flags: not in the public docs.
+- [~] `use_natives`, `threaded_server_support`: read, no effect on Horizon (documented as such).
+- Not-done list: Bedrock, proxy support, more API events (outside the 19 keys, see README).
 
 ## Round 3 (blind, not compiled)
 - Closed: the config file is found where the original keeps it on either platform (`plugins/voicechat/`, then `config/voicechat/`,

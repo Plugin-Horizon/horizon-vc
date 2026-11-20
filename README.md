@@ -23,8 +23,8 @@ groups. It speaks protocol compatibility version 20 (client mod 2.6.x).
   isolated groups; group members hear each other at any distance; empty groups disappear when
   their last member leaves the group or the server.
 - Player states: joined, voice connected/disconnected, disabled, group; removed on leave.
-- Commands `/horizonvc` (alias `/hvc`): `help`, `test <player>` (operators), `invite <player>`
-  (a clickable line that runs `/horizonvc join <group id>`; the invitation stands in for the
+- Commands `/voicechat` (the documented name; aliases `/horizonvc`, `/hvc`): `help`, `test <player>` (operators), `invite <player>`
+  (a clickable line that runs `/voicechat join <group id>`; the invitation stands in for the
   password once), `join <group name> [password]` (the name may contain spaces and matches case-insensitively; refused when more than one group has that name),
   `join <group id>`, `leave`.
 - `force_voice_chat` with `login_timeout`: a player whose client has not asked for a voice secret
@@ -77,10 +77,12 @@ it), more than three players, Bedrock players, high packet rates.
 
 ## Not supported yet
 
-- `spectator_player_possession`: needs the player a spectator watches, which Horizon does not expose.
-- `allow_pings` (external pings), `use_natives`, `threaded_server_support`.
-- Hidden groups and the two group flags of `voicechat:add_group` (always false on the wire; the layout of the flags is not in
-  the public docs); persistent groups exist server-side only (API).
+- `spectator_player_possession`: needs the player a spectator watches, which Horizon does not expose (API gap, see the audit's GAPS_UPSTREAM).
+- `allow_pings` (external pings): the public wiki says the server should answer them, but not how (the packet is not documented).
+- `use_natives`: loads native libraries on dedicated servers; nothing to load on Horizon.
+- `threaded_server_support`: read, unused (the default is `true` on Paper, Horizon has no Folia-style threads to support).
+- Hidden groups and the two group flags of `voicechat:add_group` (always false on the wire): the public wiki does not describe them,
+  so they are not guessed. Persistent groups exist server-side only (API).
 - API events beyond the microphone packet, proxy support.
 
 ## Licence and clean room

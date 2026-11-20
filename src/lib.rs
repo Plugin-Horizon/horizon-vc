@@ -14,7 +14,7 @@
 pub mod horizonvc_core;
 use crate::horizonvc_core::{command, on_payload, tick, Guest, Out, USAGES};
 use mod_api::{
-    Command, CommandArgumentValue, CommandSource, Flow, Hooks, PlayerRef, RegisterCommandsEvent,
+    Command, CommandArgumentValue, CommandSource, Flow, Hooks, PlayerRef, RegisterCommandsEvent, RegisterNodeCommandsEvent,
     Registrar, RegistrationContext, RunModCommandEvent, ServerHost, ServerTickEvent, ServerTickPhase,
     Text,
 };
@@ -192,13 +192,18 @@ impl Hooks for Mod {
 
     fn register_commands(&self, _: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
         for (usage, level) in USAGES {
-            let command = Command::op(usage, level);
-            // `test` is for `voicechat.admin`: the node decides who sees and runs it when a provider is set.
-            event.commands.push(if usage.contains(" test ") {
-                command.with_node(&typed_node("voicechat.admin"))
-            } else {
-                command
-            });
+            if !usage.contains(" test ") {
+                event.commands.push(Command::op(usage, level));
+            }
+        }
+    }
+
+    fn register_node_commands(&self, _: &mut dyn ServerHost, event: &mut RegisterNodeCommandsEvent<'_>) {
+        // `test` is for `voicechat.admin`: the node decides who sees and runs it when a provider is set.
+        for (usage, level) in USAGES {
+            if usage.contains(" test ") {
+                event.commands.push(Command::op(usage, level).with_node(&typed_node("voicechat.admin")));
+            }
         }
     }
 

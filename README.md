@@ -1,5 +1,11 @@
 # HorizonVC
 
+## Port status
+
+Compared with Simple Voice Chat, server side (documentation only) (estimate): **81 %** of the original's commands, permissions, config keys, messages and features work today; **81 %** once our open Horizon PRs are merged; **81 %** with the engine changes we are writing; **81 %** with the newest Horizon SDK. Estimated count: ~30/~37 items. Status: not yet compiled after the 2026-11-20 round.
+
+Clean-room reimplementation from public docs.
+
 A voice chat server for [Horizon](https://github.com/horizon-rust/horizon), the Rust server for
 Minecraft 26.3, written as a native Horizon mod.
 
@@ -23,21 +29,21 @@ groups. It speaks protocol compatibility version 20 (client mod 2.6.x).
   isolated groups; group members hear each other at any distance; empty groups disappear when
   their last member leaves the group or the server.
 - Player states: joined, voice connected/disconnected, disabled, group; removed on leave.
-- Commands `/horizonvc` (alias `/hvc`): `help`, `test <player>` (operators), `invite <player>`
-  (a clickable line that runs `/horizonvc join <group id>`; the invitation stands in for the
-  password once), `join <group name> [password]` (refused when more than one group has that name),
+- Commands `/voicechat` (the documented name; aliases `/horizonvc`, `/hvc`): `help`, `test <player>` (operators), `invite <player>`
+  (a clickable line that runs `/voicechat join <group id>`; the invitation stands in for the
+  password once), `join <group name> [password]` (the name may contain spaces and matches case-insensitively; refused when more than one group has that name),
   `join <group id>`, `leave`.
 - `force_voice_chat` with `login_timeout`: a player whose client has not asked for a voice secret
   within the timeout is kicked.
-- Permissions `horizonvc.listen`, `horizonvc.speak`, `horizonvc.groups`, `horizonvc.admin`
-  (default: everyone; `admin` for operators). Horizon has no permission system, so another mod can
-  answer them through `api::set_permission_check`. A player without `listen` hears nothing, one
+- Permissions `voicechat.listen`, `voicechat.speak`, `voicechat.groups`, `voicechat.admin`
+  (the documented Simple Voice Chat names; default: everyone, `admin` for operators). They are declared as typed
+  permission nodes, so a permissions mod such as LuckPerms answers them (the old `horizonvc.*` names are gone). A player without `listen` hears nothing, one
   without `speak` is not routed, one without `groups` cannot create or join groups.
 - A Rust API for other mods (`horizonvc_core::api`): `connection_of`, `groups`, `create_group`
   (with persistent groups, which stay when empty), `remove_group`, `set_group`,
   `set_permission_check`, `add_mic_listener` (hear or drop each microphone packet),
   `send_as_player` (Opus data routed as a player's voice, for players without the mod) and
-  `send_static` (a static audio channel: one listener, as group audio).
+  `send_static` (a static audio channel: one listener, as group audio), `send_locational` (audio at a position) and volume categories (`register_category`, `unregister_category`, `categories`). Translations: `translations.properties` is read.
 
 ## Names that must stay `voicechat:`
 
@@ -49,8 +55,10 @@ are not renamed. Everything else is HorizonVC's own: command, permission nodes, 
 
 ## Config
 
-`config/horizonvc/horizonvc-server.properties` in the server folder, written with the defaults on
-the first start ([core/horizonvc-server.properties](core/horizonvc-server.properties)). Keys:
+The original's `voicechat-server.properties` is read where Simple Voice Chat keeps it: `plugins/voicechat/` (Paper), then
+`config/voicechat/` (mod loaders). Where neither exists, `config/horizonvc/horizonvc-server.properties` is written with
+the defaults on the first start ([data/horizonvc/horizonvc-server.properties](data/horizonvc/horizonvc-server.properties)).
+`translations.properties` is looked up in the same two folders. Keys:
 `port` (-1: the game port), `bind_address` (empty: `server-ip`, `*`: every address),
 `max_voice_distance`, `whisper_distance`, `codec`, `mtu_size`, `tcp_rate_limit`, `keep_alive`,
 `enable_groups`, `voice_host`, `allow_recording`, `broadcast_range`, `force_voice_chat`,
@@ -59,26 +67,9 @@ the first start ([core/horizonvc-server.properties](core/horizonvc-server.proper
 
 ## Build
 
-The mod follows the layout of the horizon-mods registry: `compatibility.json` names the Horizon commit and the
-horizon-mixins commit, and the bundle is `mixins/horizonvc/`: one crate (`core`, std + `ring` + `log`, all in
-Horizon's `Cargo.lock`) and four injections (`payload.rs`, `flush.rs`, `register.rs`, `perform.rs`). From a clone of
-[horizon-mods](https://github.com/horizon-rust/horizon-mods):
-
-```sh
-python3 native/tools/native.py check /path/to/horizon-vc
-python3 native/tools/native.py check /path/to/horizon-vc --horizon latest
-python3 native/tools/native.py package /path/to/horizon-vc
-```
-
-`horizon_revision` in `compatibility.json` and in `mixins/horizonvc/horizon-mixin.toml` pins the Horizon commit it
-targets (both must be the same). Unit tests: `cargo test` in `mixins/horizonvc/core/` (the crate ships no
-`Cargo.lock`; copy Horizon's next to it to get the same crate versions).
-
-The injection on `native_custom_payload_from_client` hears a player's `voicechat:*` payload. The tick injection
-(`flush.rs`) uses `native_server_players`, `native_player_channels`, `native_send_custom_payload_to_player`,
-`native_tell` and `native_kick`. The commands use the hook points `register_commands` v1 and `perform_command` v1
-(`register.rs`, `perform.rs`). The engine glue type-checks on the Horizon commit named above (`native.py check`);
-it has not been run in a game yet, the core crate's unit tests run.
+A native Horizon mod: `horizon-mod.toml` plus this crate (`src/lib.rs` is the mod, `src/horizonvc_core/` the
+protocol core). Unit tests: `cargo test`. It uses the mod API for raw `voicechat:*` payloads, the tick, commands and
+typed permission nodes; it has not been run with a real client yet.
 
 ## Testing
 
@@ -92,14 +83,13 @@ it), more than three players, Bedrock players, high packet rates.
 
 ## Not supported yet
 
-- Volume categories and the category of a sound.
-- Locational and entity audio channels and the audio player (a later Opus encoder).
-- `spectator_interaction` and `spectator_player_possession`: spectators are routed like everyone
-  else. Possession also needs the player a spectator watches, which Horizon does not expose.
-- `allow_pings` (external pings), `use_natives`, `threaded_server_support`.
-- Hidden groups and the two group flags of `voicechat:add_group` (always false on the wire);
-  persistent groups exist server-side only (API).
-- API events beyond the microphone packet, proxy support, translations.
+- `spectator_player_possession`: needs the player a spectator watches, which Horizon does not expose (API gap, see the audit's GAPS_UPSTREAM).
+- `allow_pings` (external pings): the public wiki says the server should answer them, but not how (the packet is not documented).
+- `use_natives`: loads native libraries on dedicated servers; nothing to load on Horizon.
+- `threaded_server_support`: read, unused (the default is `true` on Paper, Horizon has no Folia-style threads to support).
+- Hidden groups and the two group flags of `voicechat:add_group` (always false on the wire): the public wiki does not describe them,
+  so they are not guessed. Persistent groups exist server-side only (API).
+- API events beyond the microphone packet, proxy support.
 
 ## Licence and clean room
 

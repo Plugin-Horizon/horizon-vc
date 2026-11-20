@@ -4,7 +4,7 @@
 //! - every other member of the speaker's group gets a group sound, at any distance;
 //! - outsiders in range hear a member only of an open group;
 //! - members of an isolated group hear no outsider; other members do.
-use crate::packets::{ISOLATED, OPEN};
+use crate::horizonvc_core::packets::{ISOLATED, OPEN};
 
 /// A voice-connected player as routing sees them.
 #[derive(Clone, Debug)]
@@ -51,7 +51,7 @@ pub fn recipients(speaker: &Listener, everyone: &[Listener], cutoff: f64) -> Vec
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::packets::NORMAL;
+    use crate::horizonvc_core::packets::NORMAL;
 
     fn at(uuid: u128, x: f64) -> Listener<'static> {
         Listener {

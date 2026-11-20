@@ -1,7 +1,43 @@
-//! `horizonvc-server.properties`: HorizonVC's server config, a Java-style key=value file. Only the
-//! keys listed in the README are acted on; the
-//! others are read and ignored. A missing file is written with the defaults.
+//! HorizonVC's server settings. The config is the original plugin's `plugins/voicechat/voicechat-server.properties`
+//! (Java `.properties`, read with `properties`); the port's own `config/horizonvc/horizonvc-server.properties` is only
+//! a fallback for a server where the original file is missing. Keys the original does not have are read and ignored.
+use crate::horizonvc_core::properties;
 use std::path::Path;
+
+/// The original plugin's config, relative to the server folder.
+pub const ORIGINAL_PATH: &str = "plugins/voicechat/voicechat-server.properties";
+/// The mod-loader location of the same file (Fabric, NeoForge, Forge, Quilt), read when the Bukkit one is missing.
+pub const LOADER_PATH: &str = "config/voicechat/voicechat-server.properties";
+/// The fallback config, relative to the server folder; written with the defaults when missing.
+pub const FALLBACK_PATH: &str = "config/horizonvc/horizonvc-server.properties";
+
+/// The first existing original file, Bukkit location first, then the mod-loader one.
+pub fn original_path() -> Option<&'static str> {
+    [ORIGINAL_PATH, LOADER_PATH].into_iter().find(|p| Path::new(p).is_file())
+}
+
+/// The 19 keys of the original `voicechat-server.properties`, in its order. `check_original` reports against these.
+pub const ORIGINAL_KEYS: [&str; 19] = [
+    "port",
+    "bind_address",
+    "max_voice_distance",
+    "whisper_distance",
+    "codec",
+    "mtu_size",
+    "tcp_rate_limit",
+    "keep_alive",
+    "enable_groups",
+    "voice_host",
+    "allow_recording",
+    "spectator_interaction",
+    "spectator_player_possession",
+    "force_voice_chat",
+    "login_timeout",
+    "broadcast_range",
+    "allow_pings",
+    "use_natives",
+    "threaded_server_support",
+];
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Config {
@@ -61,61 +97,60 @@ impl Default for Config {
     }
 }
 
-pub const DEFAULT_FILE: &str = include_str!("../horizonvc-server.properties");
+pub const DEFAULT_FILE: &str = include_str!("../../data/horizonvc/horizonvc-server.properties");
 
-fn number<T: std::str::FromStr>(line: usize, key: &str, value: &str, what: &str) -> Result<T, String> {
+fn number<T: std::str::FromStr>(key: &str, value: &str, what: &str) -> Result<T, String> {
     value
         .parse()
-        .map_err(|_| format!("line {line}: {key} is not {what}"))
+        .map_err(|_| format!("{key} is not {what}"))
 }
 
-fn flag(line: usize, key: &str, value: &str) -> Result<bool, String> {
+fn flag(key: &str, value: &str) -> Result<bool, String> {
     match value.to_ascii_lowercase().as_str() {
         "true" => Ok(true),
         "false" => Ok(false),
-        _ => Err(format!("line {line}: {key} is not true or false")),
+        _ => Err(format!("{key} is not true or false")),
     }
 }
 
 impl Config {
-    /// Reads Java-style `key=value` lines: `#` and `!` start a comment line, blank lines are skipped.
-    /// Unknown keys are ignored; a bad value is an error (the server then uses the defaults).
+    /// Reads Java `.properties` text. Unknown keys are ignored; a bad value is an error (the server then uses the
+    /// defaults). Error texts name the key only, never its value.
     pub fn parse(text: &str) -> Result<Self, String> {
         let mut c = Config::default();
-        for (i, raw) in text.lines().enumerate() {
-            let n = i + 1;
-            let line = raw.trim();
-            if line.is_empty() || line.starts_with('#') || line.starts_with('!') {
-                continue;
-            }
-            let (key, value) = line
-                .split_once('=')
-                .ok_or_else(|| format!("line {n}: no '=' in {line:?}"))?;
-            let (key, value) = (key.trim(), value.trim());
+        for (key, value) in properties::parse(text) {
+            let value = value.trim();
+            let key = key.as_str();
             match key {
-                "port" => c.port = number(n, key, value, "an integer")?,
+                "port" => c.port = number(key, value, "an integer")?,
                 "bind_address" => c.bind_address = value.to_owned(),
-                "max_voice_distance" => c.max_voice_distance = number(n, key, value, "a number")?,
-                "whisper_distance" => c.whisper_distance = number(n, key, value, "a number")?,
+                "max_voice_distance" => c.max_voice_distance = number(key, value, "a number")?,
+                "whisper_distance" => c.whisper_distance = number(key, value, "a number")?,
                 "codec" => c.codec = value.to_owned(),
-                "mtu_size" => c.mtu_size = number(n, key, value, "an integer")?,
-                "tcp_rate_limit" => c.tcp_rate_limit = number(n, key, value, "an integer")?,
-                "keep_alive" => c.keep_alive = number::<i32>(n, key, value, "an integer")?.max(1),
-                "enable_groups" => c.enable_groups = flag(n, key, value)?,
+                "mtu_size" => c.mtu_size = number(key, value, "an integer")?,
+                "tcp_rate_limit" => c.tcp_rate_limit = number(key, value, "an integer")?,
+                "keep_alive" => c.keep_alive = number::<i32>(key, value, "an integer")?.max(1),
+                "enable_groups" => c.enable_groups = flag(key, value)?,
                 "voice_host" => c.voice_host = value.to_owned(),
-                "allow_recording" => c.allow_recording = flag(n, key, value)?,
-                "broadcast_range" => c.broadcast_range = number(n, key, value, "a number")?,
-                "force_voice_chat" => c.force_voice_chat = flag(n, key, value)?,
-                "login_timeout" => c.login_timeout = number::<i32>(n, key, value, "an integer")?.max(0),
-                "spectator_interaction" => c.spectator_interaction = flag(n, key, value)?,
-                "spectator_player_possession" => c.spectator_player_possession = flag(n, key, value)?,
-                "allow_pings" => c.allow_pings = flag(n, key, value)?,
-                "use_natives" => c.use_natives = flag(n, key, value)?,
-                "threaded_server_support" => c.threaded_server_support = flag(n, key, value)?,
+                "allow_recording" => c.allow_recording = flag(key, value)?,
+                "broadcast_range" => c.broadcast_range = number(key, value, "a number")?,
+                "force_voice_chat" => c.force_voice_chat = flag(key, value)?,
+                "login_timeout" => c.login_timeout = number::<i32>(key, value, "an integer")?.max(0),
+                "spectator_interaction" => c.spectator_interaction = flag(key, value)?,
+                "spectator_player_possession" => c.spectator_player_possession = flag(key, value)?,
+                "allow_pings" => c.allow_pings = flag(key, value)?,
+                "use_natives" => c.use_natives = flag(key, value)?,
+                "threaded_server_support" => c.threaded_server_support = flag(key, value)?,
                 _ => {}
             }
         }
         Ok(c)
+    }
+
+    /// Reads the original plugin's file at `path`.
+    pub fn read_original(path: &Path) -> Result<Self, String> {
+        let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        Self::parse(&text)
     }
 
     /// Reads `path`, writing the defaults there first when it is missing.
@@ -187,6 +222,14 @@ mod tests {
             (f.force_voice_chat, f.login_timeout, f.allow_pings),
             (true, 5000, false)
         );
+    }
+
+    #[test]
+    fn a_refused_value_is_named_by_its_key_only() {
+        let e = Config::parse("port=secretvalue\n").unwrap_err();
+        assert!(e.contains("port") && !e.contains("secretvalue"), "{e}");
+        let e = Config::parse("enable_groups=maybe\n").unwrap_err();
+        assert!(!e.contains("maybe"), "{e}");
     }
 
     #[test]

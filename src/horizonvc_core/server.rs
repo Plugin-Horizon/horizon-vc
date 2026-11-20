@@ -1,10 +1,11 @@
 //! The voice server: state shared by the game thread (plugin channel messages, the players'
 //! positions each tick) and the UDP thread (authentication, keep-alives, audio routing).
-use crate::config::{server_property, Config};
-use crate::crypto::{open, random, seal};
-use crate::packets::{self as p, id, FromClient, Group, PlayerState, Voice};
-use crate::routing::{recipients, Delivery, Listener};
-use crate::wire::{Reader, Writer};
+use crate::horizonvc_core::config::{self, server_property, Config};
+use crate::horizonvc_core::crypto::{open, random, seal};
+use crate::horizonvc_core::packets::{self as p, id, FromClient, Group, PlayerState, Voice};
+use crate::horizonvc_core::routing::{recipients, Delivery, Listener};
+use crate::horizonvc_core::translations::Texts;
+use crate::horizonvc_core::wire::{Reader, Writer};
 use std::collections::{HashMap, HashSet};
 use std::net::{SocketAddr, UdpSocket};
 use std::path::Path;
@@ -16,15 +17,11 @@ mod commands;
 
 pub use commands::USAGES;
 
-/// Where the config is read from, relative to the server's directory.
-pub const CONFIG_PATH: &str = "config/horizonvc/horizonvc-server.properties";
+/// Where the translations are read from, relative to the server's directory (the original plugin's file).
+pub const TRANSLATIONS_PATH: &str = "plugins/voicechat/translations.properties";
 
-/// Chat line for a client that announces a different protocol compatibility version.
-const INCOMPATIBLE: &str = "Voice chat is unavailable: your client mod speaks a different protocol version than this server.\nInstall the 2.6.x release of the voice chat client mod to use it.";
-
-/// The text a player without the mod gets with `force_voice_chat` (shown as the kick reason).
-pub const MOD_REQUIRED: &str =
-    "You need Simple Voice Chat (version 2.6.x) installed to play on this server.";
+/// The mod-loader location of the translations, read when the Bukkit one is missing.
+pub const LOADER_TRANSLATIONS_PATH: &str = "config/voicechat/translations.properties";
 
 /// A player on the server, as the game thread last saw them.
 #[derive(Clone, Debug)]
@@ -35,18 +32,20 @@ pub struct Guest<'a> {
     pub pos: [f64; 3],
     /// The operator level, 0 to 4.
     pub level: u8,
+    /// Game mode 3: the player is a spectator.
+    pub spectator: bool,
     /// Whether the client registered a `voicechat:` plugin channel, i.e. has the voice chat mod
     /// (`native_player_channels`).
     pub has_mod: bool,
 }
 
-/// Asks whether a player has a permission node (`horizonvc.listen`, `horizonvc.speak`, `horizonvc.groups`,
-/// `horizonvc.admin`), given their operator level. Another mod (a permissions mod) can set its own.
+/// Asks whether a player has a permission node (`voicechat.listen`, `voicechat.speak`, `voicechat.groups`,
+/// `voicechat.admin`), given their operator level. Another mod (a permissions mod) can set its own.
 pub type PermissionCheck = fn(player: u128, level: u8, node: &str) -> bool;
 
-/// Defaults: everyone listens, speaks and uses groups; `horizonvc.admin` is for operators.
+/// Defaults: everyone listens, speaks and uses groups; `voicechat.admin` is for operators.
 pub fn default_permissions(_player: u128, level: u8, node: &str) -> bool {
-    node != "horizonvc.admin" || level >= 1
+    node != "voicechat.admin" || level >= 1
 }
 
 /// Hears a player's microphone packet before it is routed: the speaker, the Opus data, whether they whisper.
@@ -83,6 +82,7 @@ struct Online {
     dimension: String,
     pos: [f64; 3],
     level: u8,
+    spectator: bool,
     has_mod: bool,
     joined: Instant,
     kicked: bool,
@@ -101,6 +101,7 @@ struct Voicer {
 
 pub struct State {
     cfg: Config,
+    texts: Texts,
     port: i32,
     online: HashMap<u128, Online>,
     voicers: HashMap<u128, Voicer>,
@@ -135,6 +136,7 @@ impl State {
     pub fn new(cfg: Config, port: i32) -> Self {
         Self {
             cfg,
+            texts: Texts::default(),
             port,
             online: HashMap::new(),
             voicers: HashMap::new(),
@@ -235,6 +237,7 @@ impl State {
             if let Some(o) = self.online.get_mut(&g.uuid) {
                 o.pos = g.pos;
                 o.level = g.level;
+                o.spectator = g.spectator;
                 o.has_mod = g.has_mod;
                 if o.dimension != g.dimension {
                     o.dimension = g.dimension.to_owned();
@@ -248,6 +251,7 @@ impl State {
                     dimension: g.dimension.to_owned(),
                     pos: g.pos,
                     level: g.level,
+                    spectator: g.spectator,
                     has_mod: g.has_mod,
                     joined: now,
                     kicked: false,
@@ -288,7 +292,7 @@ impl State {
                 self.online.get_mut(&player).unwrap().kicked = true;
                 self.outbox.push(Out::Kick {
                     player,
-                    text: MOD_REQUIRED.into(),
+                    text: self.texts.force_kick(),
                 });
             }
         }
@@ -297,14 +301,29 @@ impl State {
 
     /// A plugin channel message from a player.
     pub fn payload(&mut self, player: u128, channel: &str, data: &[u8], now: Instant) {
-        if let Some(v) = self.voicers.get_mut(&player) {
-            if now.duration_since(v.window.0) >= Duration::from_secs(1) {
-                v.window = (now, 0);
+        // Over `tcp_rate_limit` packets in a second the player is kicked, once, as the original does.
+        let over_limit = match self.voicers.get_mut(&player) {
+            Some(v) => {
+                if now.duration_since(v.window.0) >= Duration::from_secs(1) {
+                    v.window = (now, 0);
+                }
+                v.window.1 += 1;
+                self.cfg.tcp_rate_limit > 0 && v.window.1 > self.cfg.tcp_rate_limit
             }
-            v.window.1 += 1;
-            if self.cfg.tcp_rate_limit > 0 && v.window.1 > self.cfg.tcp_rate_limit {
-                return;
+            None => false,
+        };
+        if over_limit {
+            if let Some(o) = self.online.get_mut(&player) {
+                if !o.kicked {
+                    o.kicked = true;
+                    log(&format!("{} exceeded the packet rate limit", o.name));
+                    self.outbox.push(Out::Kick {
+                        player,
+                        text: self.texts.rate_limit_kick(),
+                    });
+                }
             }
+            return;
         }
         let Ok(msg) = FromClient::decode(channel, data) else {
             return;
@@ -321,7 +340,7 @@ impl State {
                 if version != p::COMPATIBILITY_VERSION {
                     self.outbox.push(Out::Chat {
                         player,
-                        text: INCOMPATIBLE.into(),
+                        text: self.texts.incompatible(),
                     });
                     return;
                 }
@@ -351,7 +370,7 @@ impl State {
                 self.voicers.get_mut(&player).unwrap().disabled = disabled;
                 self.broadcast_state(player);
             }
-            _ if !self.cfg.enable_groups || !self.may(player, "horizonvc.groups") => {}
+            _ if !self.cfg.enable_groups || !self.may(player, "voicechat.groups") => {}
             FromClient::CreateGroup {
                 name,
                 password,
@@ -482,7 +501,11 @@ impl State {
                 whispering,
             } if v.connected => {
                 v.last_seen = now;
-                if self.may(uuid, "horizonvc.speak")
+                // With `spectator_interaction=false` a spectator's voice goes nowhere.
+                let silenced_spectator = !self.cfg.spectator_interaction
+                    && self.online.get(&uuid).is_some_and(|o| o.spectator);
+                if !silenced_spectator
+                    && self.may(uuid, "voicechat.speak")
                     && !self
                         .mic_listeners
                         .iter()
@@ -502,7 +525,7 @@ impl State {
     }
 
     /// An online player as routing sees them, with or without the mod (an API audio sender speaks for a player
-    /// without it). A player without `horizonvc.listen` counts as having their voice chat off.
+    /// without it). A player without `voicechat.listen` counts as having their voice chat off.
     fn view(&self, uuid: u128) -> Option<Listener<'_>> {
         let o = self.online.get(&uuid)?;
         let v = self.voicers.get(&uuid);
@@ -514,7 +537,7 @@ impl State {
             uuid,
             dimension: &o.dimension,
             pos: o.pos,
-            disabled: v.is_some_and(|v| v.disabled) || !self.may(uuid, "horizonvc.listen"),
+            disabled: v.is_some_and(|v| v.disabled) || !self.may(uuid, "voicechat.listen"),
             group,
         })
     }
@@ -601,10 +624,23 @@ fn start(state: &mut Option<State>) {
     if state.is_some() {
         return;
     }
-    let cfg = Config::load(Path::new(CONFIG_PATH)).unwrap_or_else(|e| {
+    // The original plugin's file is the config. The port's own file is read only where the original is missing.
+    let cfg = if let Some(found) = config::original_path() {
+        log(&format!("Reading the config of {found}"));
+        Config::read_original(Path::new(found))
+    } else {
+        Config::load(Path::new(config::FALLBACK_PATH))
+    }
+    .unwrap_or_else(|e| {
         log_warn(&format!("Using the default config: {e}"));
         Config::default()
     });
+    let texts = Texts::load(Path::new(
+        [TRANSLATIONS_PATH, LOADER_TRANSLATIONS_PATH]
+            .into_iter()
+            .find(|p| Path::new(p).is_file())
+            .unwrap_or(TRANSLATIONS_PATH),
+    ));
     let props = std::fs::read_to_string("server.properties").unwrap_or_default();
     let port = if cfg.port < 0 {
         server_property(&props, "server-port")
@@ -621,6 +657,7 @@ fn start(state: &mut Option<State>) {
         other => other.to_owned(),
     };
     let mut s = State::new(cfg, port);
+    s.texts = texts;
     match UdpSocket::bind((host.as_str(), port as u16)) {
         Ok(sock) => {
             let _ = sock.set_read_timeout(Some(Duration::from_millis(50)));
@@ -704,6 +741,7 @@ pub fn on_payload(player: u128, channel: &str, data: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::horizonvc_core::translations::Texts;
 
     const A: u128 = 1;
     const B: u128 = 2;
@@ -716,6 +754,7 @@ mod tests {
                 dimension: "minecraft:overworld",
                 pos: [0.5, -60.0, 0.5],
                 level: 0,
+                spectator: false,
                 has_mod: false,
             },
             Guest {
@@ -724,6 +763,7 @@ mod tests {
                 dimension: "minecraft:overworld",
                 pos: [xb, -60.0, 0.5],
                 level: 0,
+                spectator: false,
                 has_mod: false,
             },
         ]
@@ -901,7 +941,7 @@ mod tests {
             out,
             vec![Out::Kick {
                 player: B,
-                text: MOD_REQUIRED.into()
+                text: Texts::default().force_kick()
             }]
         );
         assert!(s
@@ -939,7 +979,7 @@ mod tests {
             Some(vec!["Invited B to team.".into()])
         );
         let out = s.tick(&guests(2.5));
-        let want = format!("/horizonvc join {}", commands::uuid_string(id));
+        let want = format!("/voicechat join {}", commands::uuid_string(id));
         assert!(out
             .iter()
             .any(|o| matches!(o, Out::ChatCommand { player: B, command, .. } if *command == want)));
@@ -956,10 +996,25 @@ mod tests {
             s.command(B, "horizonvc test a"),
             Some(vec!["A is connected to voice chat.".into()])
         );
+        // Group names may contain spaces and match case-insensitively; the words after the name are the password.
+        s.leave(B);
+        s.groups[0].name = "my team".into();
+        assert_eq!(
+            s.command(B, "voicechat join my team"),
+            Some(vec!["Wrong password.".into()])
+        );
+        assert_eq!(
+            s.command(B, "voicechat join My Team pw"),
+            Some(vec!["You joined the group my team.".into()])
+        );
+        assert_eq!(
+            s.command(B, "voicechat join nothing here"),
+            Some(vec!["Group nothing not found.".into()])
+        );
         assert_eq!(s.command(B, "gamemode 1"), None);
         assert_eq!(s.command(B, "horizonvc").unwrap().len(), 6);
         assert_eq!(s.command(B, "hvc").unwrap().len(), 6);
-        assert!(s.command(B, "voicechat").is_none());
+        assert_eq!(s.command(B, "voicechat").unwrap().len(), 6);
     }
 
     #[test]
@@ -978,7 +1033,7 @@ mod tests {
         s.leave(A);
         assert_eq!(s.groups.len(), 1);
         fn mute_a(player: u128, _: u8, node: &str) -> bool {
-            !(player == A && node == "horizonvc.speak")
+            !(player == A && node == "voicechat.speak")
         }
         s.permissions = mute_a;
         let mut mic = vec![id::MIC, 1, 7];
@@ -1011,6 +1066,63 @@ mod tests {
                 data: p::remove_state(B)
             }]
         );
+    }
+
+    #[test]
+    fn a_player_over_the_packet_rate_limit_is_kicked_once() {
+        let now = Instant::now();
+        let mut s = State::new(
+            Config {
+                tcp_rate_limit: 2,
+                ..Config::default()
+            },
+            25666,
+        );
+        connected(&mut s, now);
+        // The player's first packet of this second was the secret request; two more are allowed.
+        let mut kicks = Vec::new();
+        for _ in 0..4 {
+            s.payload(A, "voicechat:leave_group", &[], now);
+            kicks.extend(
+                s.tick(&guests(2.5))
+                    .into_iter()
+                    .filter(|o| matches!(o, Out::Kick { .. })),
+            );
+        }
+        assert_eq!(
+            kicks,
+            vec![Out::Kick {
+                player: A,
+                text: Texts::default().rate_limit_kick()
+            }]
+        );
+    }
+
+    #[test]
+    fn a_spectators_voice_is_dropped_unless_spectator_interaction_is_on() {
+        let now = Instant::now();
+        let from: SocketAddr = "127.0.0.1:40000".parse().unwrap();
+        let mut mic = vec![id::MIC, 2, 7, 7];
+        mic.extend(5i64.to_be_bytes());
+        mic.push(0);
+        for (interaction, want) in [(false, 0usize), (true, 1)] {
+            let mut s = State::new(
+                Config {
+                    spectator_interaction: interaction,
+                    ..Config::default()
+                },
+                25666,
+            );
+            let [sa, _] = connected(&mut s, now);
+            let mut g = guests(2.5);
+            g[0].spectator = true;
+            s.tick(&g);
+            assert_eq!(
+                s.datagram(&client_frame(A, &sa, &mic), from, now).len(),
+                want,
+                "spectator_interaction={interaction}"
+            );
+        }
     }
 
     #[test]

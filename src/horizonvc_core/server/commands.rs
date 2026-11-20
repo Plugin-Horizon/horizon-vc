@@ -1,9 +1,15 @@
-//! `/horizonvc help|test|invite|join|leave`, with its alias `/hvc`.
+//! `/voicechat help|test|invite|join|leave` (the original's command name), with the aliases `/horizonvc` and `/hvc`.
 use super::{Join, Out, State};
 
-/// The usages to register, with the operator level each needs to be seen (0: everyone). `test` needs
-/// `horizonvc.admin`, checked when it runs.
-pub const USAGES: [(&str, u8); 12] = [
+/// The usages to register, with the operator level each needs to be seen (0: everyone; `test` also carries the `voicechat.admin` node). `test` needs
+/// `voicechat.admin`, checked when it runs.
+pub const USAGES: [(&str, u8); 18] = [
+    ("voicechat", 0),
+    ("voicechat help", 0),
+    ("voicechat test <player:player>", 1),
+    ("voicechat invite <player:player>", 0),
+    ("voicechat join <group:word> [password:text]", 0),
+    ("voicechat leave", 0),
     ("horizonvc", 0),
     ("horizonvc help", 0),
     ("horizonvc test <player:player>", 1),
@@ -18,18 +24,20 @@ pub const USAGES: [(&str, u8); 12] = [
     ("hvc leave", 0),
 ];
 
-/// Whether the first word of a command line is `/horizonvc` or its alias `/hvc`.
+/// Whether the first word of a command line is `/voicechat` or one of its aliases `/horizonvc`, `/hvc`.
 pub fn is_command_word(word: &str) -> bool {
-    word.eq_ignore_ascii_case("horizonvc") || word.eq_ignore_ascii_case("hvc")
+    ["voicechat", "horizonvc", "hvc"]
+        .iter()
+        .any(|name| word.eq_ignore_ascii_case(name))
 }
 
 const HELP: [&str; 6] = [
-    "/horizonvc help - List these commands (alias /hvc)",
-    "/horizonvc test <player> - Check whether a player's voice chat is connected",
-    "/horizonvc invite <player> - Send a player a link to your group",
-    "/horizonvc join <group> [password] - Join the group of that name",
-    "/horizonvc join <group id> - Join the group with that ID",
-    "/horizonvc leave - Leave your current group",
+    "/voicechat help - List these commands (aliases /horizonvc, /hvc)",
+    "/voicechat test <player> - Check whether a player's voice chat is connected",
+    "/voicechat invite <player> - Send a player a link to your group",
+    "/voicechat join <group> [password] - Join the group of that name",
+    "/voicechat join <group id> - Join the group with that ID",
+    "/voicechat leave - Leave your current group",
 ];
 
 /// `8-4-4-4-12` hex digits.
@@ -61,7 +69,7 @@ impl State {
             .map(|(u, _)| *u)
     }
 
-    /// A player's command line (without its slash); `None` when it isn't `/horizonvc`. Lines for other players
+    /// A player's command line (without its slash); `None` when it isn't `/voicechat`. Lines for other players
     /// go to the outbox.
     pub fn command(&mut self, player: u128, line: &str) -> Option<Vec<String>> {
         let mut words = line.split_whitespace();
@@ -76,13 +84,11 @@ impl State {
             Some(s) => s.to_string(),
         };
         if !self.voicers.contains_key(&player) {
-            return reply(
-                "This command needs the Simple Voice Chat client mod, which your client has not reported.",
-            );
+            return reply(&self.texts.command_needed());
         }
         match (sub.as_str(), &args[..]) {
             ("test", [name]) => {
-                if !self.may(player, "horizonvc.admin") {
+                if !self.may(player, "voicechat.admin") {
                     return reply("You don't have permission to do this.");
                 }
                 let Some(target) = self.online_named(name) else {
@@ -100,7 +106,7 @@ impl State {
             ("invite" | "join" | "leave", _) if !self.cfg.enable_groups => {
                 reply("Groups are disabled on this server.")
             }
-            ("invite" | "join" | "leave", _) if !self.may(player, "horizonvc.groups") => {
+            ("invite" | "join" | "leave", _) if !self.may(player, "voicechat.groups") => {
                 reply("You don't have permission to use groups.")
             }
             ("invite", [name]) => {
@@ -122,22 +128,39 @@ impl State {
                         "{} invited you to the group {group_name}. [Click to join]",
                         self.online[&player].name
                     ),
-                    command: format!("/horizonvc join {}", uuid_string(group)),
+                    command: format!("/voicechat join {}", uuid_string(group)),
                 });
                 reply(&format!("Invited {target_name} to {group_name}."))
             }
-            ("join", [group, rest @ ..]) => {
-                let password = (!rest.is_empty()).then(|| rest.join(" "));
-                let id = match parse_uuid(group) {
+            ("join", [first, rest @ ..]) => {
+                // A UUID joins by ID; otherwise the longest leading run of words that names a group is the
+                // name (group names may contain spaces) and the words after it are the password.
+                let mut password = (!rest.is_empty()).then(|| rest.join(" "));
+                let mut group = first.to_string();
+                let id = match parse_uuid(first) {
                     Some(id) => id,
                     None => {
-                        let named: Vec<u128> = self
-                            .groups
-                            .iter()
-                            .filter(|g| g.name == *group)
-                            .map(|g| g.id)
-                            .collect();
-                        match named[..] {
+                        let mut found: Vec<u128> = Vec::new();
+                        for n in (1..=args.len()).rev() {
+                            let name = args[..n].join(" ");
+                            let exact: Vec<u128> =
+                                self.groups.iter().filter(|g| g.name == name).map(|g| g.id).collect();
+                            found = if exact.is_empty() {
+                                self.groups
+                                    .iter()
+                                    .filter(|g| g.name.eq_ignore_ascii_case(&name))
+                                    .map(|g| g.id)
+                                    .collect()
+                            } else {
+                                exact
+                            };
+                            if !found.is_empty() {
+                                password = (n < args.len()).then(|| args[n..].join(" "));
+                                group = name;
+                                break;
+                            }
+                        }
+                        match found[..] {
                             [id] => id,
                             [] => return reply(&format!("Group {group} not found.")),
                             _ => {

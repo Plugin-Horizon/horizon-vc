@@ -6,8 +6,15 @@ use std::path::Path;
 
 /// The original plugin's config, relative to the server folder.
 pub const ORIGINAL_PATH: &str = "plugins/voicechat/voicechat-server.properties";
+/// The mod-loader location of the same file (Fabric, NeoForge, Forge, Quilt), read when the Bukkit one is missing.
+pub const LOADER_PATH: &str = "config/voicechat/voicechat-server.properties";
 /// The fallback config, relative to the server folder; written with the defaults when missing.
 pub const FALLBACK_PATH: &str = "config/horizonvc/horizonvc-server.properties";
+
+/// The first existing original file, Bukkit location first, then the mod-loader one.
+pub fn original_path() -> Option<&'static str> {
+    [ORIGINAL_PATH, LOADER_PATH].into_iter().find(|p| Path::new(p).is_file())
+}
 
 /// The 18 keys of the original `voicechat-server.properties`, in its order. `check_original` reports against these.
 pub const ORIGINAL_KEYS: [&str; 18] = [

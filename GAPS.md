@@ -29,5 +29,6 @@ Answer texts and colours are HorizonVC's own and open to taste:
 
 ## Not supported yet
 
-See the README: spectator routing and possession, locational and entity audio, volume categories, `allow_pings`, hidden
-groups and API events beyond the microphone packet.
+- `spectator_player_possession`: a spectator talking to the player they spectate needs the spectated entity (engine API).
+- Hidden groups: the position of the hidden flag in `voicechat:add_group` is not in the public docs.
+- `allow_pings`: the external ping packet is undocumented. `use_natives`, `threaded_server_support`: nothing to switch.

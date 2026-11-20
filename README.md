@@ -37,7 +37,7 @@ groups. It speaks protocol compatibility version 20 (client mod 2.6.x).
   (with persistent groups, which stay when empty), `remove_group`, `set_group`,
   `set_permission_check`, `add_mic_listener` (hear or drop each microphone packet),
   `send_as_player` (Opus data routed as a player's voice, for players without the mod) and
-  `send_static` (a static audio channel: one listener, as group audio).
+  `send_static` (a static audio channel: one listener, as group audio), `send_locational` (audio at a position) and volume categories (`register_category`, `unregister_category`, `categories`). Translations: `translations.properties` is read.
 
 ## Names that must stay `voicechat:`
 
@@ -49,8 +49,10 @@ are not renamed. Everything else is HorizonVC's own: command, permission nodes, 
 
 ## Config
 
-`config/horizonvc/horizonvc-server.properties` in the server folder, written with the defaults on
-the first start ([core/horizonvc-server.properties](core/horizonvc-server.properties)). Keys:
+The original's `voicechat-server.properties` is read where Simple Voice Chat keeps it: `plugins/voicechat/` (Paper), then
+`config/voicechat/` (mod loaders). Where neither exists, `config/horizonvc/horizonvc-server.properties` is written with
+the defaults on the first start ([data/horizonvc/horizonvc-server.properties](data/horizonvc/horizonvc-server.properties)).
+`translations.properties` is looked up in the same two folders. Keys:
 `port` (-1: the game port), `bind_address` (empty: `server-ip`, `*`: every address),
 `max_voice_distance`, `whisper_distance`, `codec`, `mtu_size`, `tcp_rate_limit`, `keep_alive`,
 `enable_groups`, `voice_host`, `allow_recording`, `broadcast_range`, `force_voice_chat`,
@@ -75,14 +77,11 @@ it), more than three players, Bedrock players, high packet rates.
 
 ## Not supported yet
 
-- Volume categories and the category of a sound.
-- Locational and entity audio channels and the audio player (a later Opus encoder).
-- `spectator_interaction` and `spectator_player_possession`: spectators are routed like everyone
-  else. Possession also needs the player a spectator watches, which Horizon does not expose.
+- `spectator_player_possession`: needs the player a spectator watches, which Horizon does not expose.
 - `allow_pings` (external pings), `use_natives`, `threaded_server_support`.
-- Hidden groups and the two group flags of `voicechat:add_group` (always false on the wire);
-  persistent groups exist server-side only (API).
-- API events beyond the microphone packet, proxy support, translations.
+- Hidden groups and the two group flags of `voicechat:add_group` (always false on the wire; the layout of the flags is not in
+  the public docs); persistent groups exist server-side only (API).
+- API events beyond the microphone packet, proxy support.
 
 ## Licence and clean room
 

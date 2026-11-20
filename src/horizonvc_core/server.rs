@@ -20,6 +20,9 @@ pub use commands::USAGES;
 /// Where the translations are read from, relative to the server's directory (the original plugin's file).
 pub const TRANSLATIONS_PATH: &str = "plugins/voicechat/translations.properties";
 
+/// The mod-loader location of the translations, read when the Bukkit one is missing.
+pub const LOADER_TRANSLATIONS_PATH: &str = "config/voicechat/translations.properties";
+
 /// A player on the server, as the game thread last saw them.
 #[derive(Clone, Debug)]
 pub struct Guest<'a> {
@@ -622,10 +625,9 @@ fn start(state: &mut Option<State>) {
         return;
     }
     // The original plugin's file is the config. The port's own file is read only where the original is missing.
-    let original = Path::new(config::ORIGINAL_PATH);
-    let cfg = if original.is_file() {
-        log(&format!("Reading the config of {}", config::ORIGINAL_PATH));
-        Config::read_original(original)
+    let cfg = if let Some(found) = config::original_path() {
+        log(&format!("Reading the config of {found}"));
+        Config::read_original(Path::new(found))
     } else {
         Config::load(Path::new(config::FALLBACK_PATH))
     }
@@ -633,7 +635,12 @@ fn start(state: &mut Option<State>) {
         log_warn(&format!("Using the default config: {e}"));
         Config::default()
     });
-    let texts = Texts::load(Path::new(TRANSLATIONS_PATH));
+    let texts = Texts::load(Path::new(
+        [TRANSLATIONS_PATH, LOADER_TRANSLATIONS_PATH]
+            .into_iter()
+            .find(|p| Path::new(p).is_file())
+            .unwrap_or(TRANSLATIONS_PATH),
+    ));
     let props = std::fs::read_to_string("server.properties").unwrap_or_default();
     let port = if cfg.port < 0 {
         server_property(&props, "server-port")

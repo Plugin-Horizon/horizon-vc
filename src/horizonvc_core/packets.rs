@@ -228,6 +228,21 @@ impl<'a> Voice<'a> {
 
 /// A player's voice for one listener: proximity (`distance` set) or group sound.
 pub fn sound(sender: u128, audio: &[u8], sequence: i64, proximity: Option<(f32, bool)>) -> Vec<u8> {
+    sound_in(sender, audio, sequence, proximity, None)
+}
+
+/// The flag bit after the distance (or alone, in group sound) that says a volume category follows.
+pub const SOUND_HAS_CATEGORY: u8 = 0b10;
+
+/// [`sound`] with the volume category of the channel (`AudioChannel.setCategory`): the closing flags byte
+/// (bit 0 whispering) gets [`SOUND_HAS_CATEGORY`] and the category id follows it as a string.
+pub fn sound_in(
+    sender: u128,
+    audio: &[u8],
+    sequence: i64,
+    proximity: Option<(f32, bool)>,
+    category: Option<&str>,
+) -> Vec<u8> {
     let mut w = Writer::default();
     let pid = if proximity.is_some() {
         id::PLAYER_SOUND
@@ -235,15 +250,47 @@ pub fn sound(sender: u128, audio: &[u8], sequence: i64, proximity: Option<(f32, 
         id::GROUP_SOUND
     };
     // The channel id is the sender's UUID for both kinds.
-    w.u8(pid)
-        .uuid(sender)
-        .uuid(sender)
-        .bytes(audio)
-        .i64(sequence);
-    match proximity {
-        Some((distance, whispering)) => w.f32(distance).bool(whispering),
-        None => w.u8(0),
-    };
+    w.u8(pid).uuid(sender).uuid(sender).bytes(audio).i64(sequence);
+    let mut flags = if category.is_some() { SOUND_HAS_CATEGORY } else { 0 };
+    if let Some((distance, whispering)) = proximity {
+        w.f32(distance);
+        flags |= whispering as u8;
+    }
+    w.u8(flags);
+    if let Some(category) = category {
+        w.string(category);
+    }
+    w.0
+}
+
+/// `voicechat:add_category`: the slider a client shows for a volume category. The id and the name are
+/// strings, the description and the icon are each a flag byte and then the value (the icon: 256 ARGB ints).
+pub fn add_category(id: &str, name: &str, description: &str, icon: Option<&[i32]>) -> Vec<u8> {
+    let mut w = Writer::default();
+    w.string(id).string(name);
+    if description.is_empty() {
+        w.bool(false);
+    } else {
+        w.bool(true).string(description);
+    }
+    match icon {
+        Some(pixels) => {
+            w.bool(true);
+            for px in pixels {
+                w.i32(*px);
+            }
+        }
+        None => {
+            w.bool(false);
+        }
+    }
+    w.0
+}
+
+/// `voicechat:remove_category`.
+pub fn remove_category(id: &str) -> Vec<u8> {
+    let mut w = Writer::default();
+    w.string(id);
     w.0
 }
 
@@ -380,6 +427,31 @@ mod tests {
         let mut group = vec![id::GROUP_SOUND];
         group.extend(hex("35deb110752a392895c4cc89250ce08e35deb110752a392895c4cc89250ce08e03010203000000000000000500"));
         assert_eq!(sound(A, &[1, 2, 3], 5, None), group);
+    }
+
+    // The category flag (0b10) is OR-ed into the closing flags byte and the id follows as a string.
+    #[test]
+    fn sounds_carry_their_volume_category() {
+        let group = sound_in(A, &[1], 5, None, Some("radio"));
+        let tail = &group[group.len() - 7..];
+        assert_eq!(tail, [0x02, 0x05, b'r', b'a', b'd', b'i', b'o']);
+        let near = sound_in(A, &[1], 5, Some((24.0, true)), Some("radio"));
+        assert_eq!(&near[near.len() - 11..], [0x41, 0xc0, 0, 0, 0x03, 0x05, b'r', b'a', b'd', b'i', b'o']);
+        assert_eq!(sound_in(A, &[1, 2, 3], 5, None, None), sound(A, &[1, 2, 3], 5, None));
+    }
+
+    #[test]
+    fn category_packets() {
+        let mut want = vec![5u8];
+        want.extend(b"radio");
+        want.push(5);
+        want.extend(b"Radio");
+        want.push(1);
+        want.push(30);
+        want.extend(b"Adjust the lobby radio volume.");
+        want.push(0);
+        assert_eq!(add_category("radio", "Radio", "Adjust the lobby radio volume.", None), want);
+        assert_eq!(remove_category("radio"), [5, b'r', b'a', b'd', b'i', b'o']);
     }
 
     #[test]

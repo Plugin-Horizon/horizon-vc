@@ -29,3 +29,8 @@ Walked the public wiki pages (Commands, Server Config, Permissions; see CLEANROO
 - `voicechat test` usages carry the `voicechat.admin` node.
 - `join` accepts group names with spaces and case-insensitive names.
 - Gaps: spectator interaction/possession, categories, locational/entity audio, hidden groups, translations, `allow_pings` unchanged.
+
+## Round 100c (volume categories on the wire)
+- `packets::sound_in`: the closing flags byte of a sound packet gets bit `0b10` and the category id follows as a string; `send_static` / `send_locational` pass the category (before: checked only). `add_category` / `remove_category` packets (`voicechat:add_category`, `voicechat:remove_category`, added to the clientbound channels) are sent to every player on `request_secret` and broadcast on register / unregister.
+- Tests: `sounds_carry_their_volume_category`, `category_packets`, `a_static_frame_names_its_volume_category`, `a_locational_frame_names_its_volume_category`, `only_registered_categories_may_be_named`.
+- Unverified (clean room: no jar opened): the flag bit, the string format and the field order of `add_category` (description and icon each behind a flag byte). Check with a real client before a deploy; DECISIONS has the entry.

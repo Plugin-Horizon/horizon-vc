@@ -145,7 +145,7 @@ pub fn send_as_player(player: u128, opus: &[u8], sequence: i64, whispering: bool
 /// A static audio channel (`createStaticAudioChannel`): one 20 ms Opus frame heard by one player only, like
 /// group audio. The channel id goes where a player's sound carries the speaker's UUID (both UUIDs of the group
 /// sound packet). `category`, when given, must be a registered volume category (see [`register_category`]);
-/// it is checked but not yet written to the packet (the layout is not observed, see GAPS.md). False when the
+/// it is written into the sound packet (`AudioChannel.setCategory`), so the client's slider for it scales the frame. False when the
 /// listener has no voice connection, the category is unknown, or the server is not running.
 pub fn send_static(
     channel: u128,
@@ -158,7 +158,7 @@ pub fn send_static(
         return false;
     }
     with_state(|s| {
-        let (addr, data) = s.static_frame(channel, to, opus, sequence)?;
+        let (addr, data) = s.static_frame(channel, to, opus, sequence, category)?;
         s.socket.as_ref()?.send_to(&data, addr).ok()
     })
     .flatten()
@@ -182,7 +182,7 @@ pub fn send_locational(
         return 0;
     }
     with_state(|s| {
-        let out = s.locational_frames(channel, dimension, pos, distance, opus, sequence);
+        let out = s.locational_frames(channel, dimension, pos, distance, opus, sequence, category);
         let Some(sock) = &s.socket else {
             return 0;
         };
@@ -278,12 +278,21 @@ fn category_known(reg: &Categories, category: Option<&str>) -> bool {
 
 /// `registerVolumeCategory`: a slider for the sounds of the category `id` (see [`Categories::register`]).
 pub fn register_category(id: &str, name: &str, description: &str, icon: Option<&[i32]>) -> bool {
-    registry().register(id, name, description, icon)
+    let ok = registry().register(id, name, description, icon);
+    if ok {
+        // Players already connected get the slider at once (`VoicechatServerApi.registerVolumeCategory`).
+        with_state(|s| s.broadcast("voicechat:add_category", p::add_category(id, name, description, icon)));
+    }
+    ok
 }
 
 /// `unregisterVolumeCategory`: false when no category has that id.
 pub fn unregister_category(id: &str) -> bool {
-    registry().unregister(id)
+    let ok = registry().unregister(id);
+    if ok {
+        with_state(|s| s.broadcast("voicechat:remove_category", p::remove_category(id)));
+    }
+    ok
 }
 
 /// Every registered volume category.
@@ -299,10 +308,11 @@ impl State {
         to: u128,
         opus: &[u8],
         sequence: i64,
+        category: Option<&str>,
     ) -> Option<(SocketAddr, Vec<u8>)> {
         let v = self.voicers.get(&to).filter(|v| v.connected)?;
         let addr = v.addr?;
-        Some((addr, frame(&v.secret, &p::sound(channel, opus, sequence, None))))
+        Some((addr, frame(&v.secret, &p::sound_in(channel, opus, sequence, None, category))))
     }
 
     /// The datagrams of one locational frame: a proximity sound to each connected, not disabled player in
@@ -315,8 +325,9 @@ impl State {
         distance: f64,
         opus: &[u8],
         sequence: i64,
+        category: Option<&str>,
     ) -> Vec<(SocketAddr, Vec<u8>)> {
-        let plain = p::sound(channel, opus, sequence, Some((distance as f32, false)));
+        let plain = p::sound_in(channel, opus, sequence, Some((distance as f32, false)), category);
         let limit = distance * distance;
         let mut out: Vec<(u128, SocketAddr, Vec<u8>)> = self
             .voicers
@@ -450,16 +461,16 @@ mod tests {
     fn a_static_frame_goes_to_one_connected_listener_as_group_sound() {
         let s = world();
         let channel = 0xABCD_u128;
-        let (addr, data) = s.static_frame(channel, 1, &[1, 2, 3], 7).expect("connected");
+        let (addr, data) = s.static_frame(channel, 1, &[1, 2, 3], 7, None).expect("connected");
         assert_eq!(addr, "127.0.0.1:40001".parse().unwrap());
         let plain = open_for(&[1; 16], &data);
         assert_eq!(plain[0], id::GROUP_SOUND);
         assert_eq!(&plain[1..17], &channel.to_be_bytes());
         assert_eq!(&plain[17..33], &channel.to_be_bytes());
         // Disabled but connected: the radio decides who hears it, so a frame is still built.
-        assert!(s.static_frame(channel, 3, &[1], 7).is_some());
-        assert!(s.static_frame(channel, 5, &[1], 7).is_none(), "no address yet");
-        assert!(s.static_frame(channel, 99, &[1], 7).is_none(), "no voice connection");
+        assert!(s.static_frame(channel, 3, &[1], 7, None).is_some());
+        assert!(s.static_frame(channel, 5, &[1], 7, None).is_none(), "no address yet");
+        assert!(s.static_frame(channel, 99, &[1], 7, None).is_none(), "no voice connection");
     }
 
     #[test]
@@ -467,7 +478,7 @@ mod tests {
         let s = world();
         let channel = 0x5151_u128;
         let frames =
-            s.locational_frames(channel, "minecraft:overworld", [0.5, -60.0, 0.5], 16.0, &[9, 9], 3);
+            s.locational_frames(channel, "minecraft:overworld", [0.5, -60.0, 0.5], 16.0, &[9, 9], 3, None);
         let addrs: Vec<SocketAddr> = frames.iter().map(|(a, _)| *a).collect();
         // 1 stands at the source, 2 is 10 blocks away; 3 is disabled, 4 is in the Nether, 5 has no
         // address, 6 is 200 blocks away.
@@ -493,10 +504,46 @@ mod tests {
     fn a_locational_frame_with_nobody_in_range_sends_nothing() {
         let s = world();
         assert!(s
-            .locational_frames(1, "minecraft:the_end", [0.0; 3], 50.0, &[1], 0)
+            .locational_frames(1, "minecraft:the_end", [0.0; 3], 50.0, &[1], 0, None)
             .is_empty());
         assert!(s
-            .locational_frames(1, "minecraft:overworld", [500.0, 0.0, 0.0], 5.0, &[1], 0)
+            .locational_frames(1, "minecraft:overworld", [500.0, 0.0, 0.0], 5.0, &[1], 0, None)
             .is_empty());
+    }
+
+    // Simple Voice Chat `AudioChannel.setCategory("radio")`: the static frame names the category after its flags
+    // byte, so the client scales it by the "radio" slider.
+    #[test]
+    fn a_static_frame_names_its_volume_category() {
+        let s = world();
+        let (_, data) = s.static_frame(0xABCD, 1, &[1, 2, 3], 7, Some("radio")).expect("connected");
+        let plain = open_for(&[1; 16], &data);
+        let mut r = Reader::new(&plain[33..]);
+        assert_eq!(r.bytes(1024), Ok(&[1u8, 2, 3][..]));
+        assert_eq!(r.i64(), Ok(7));
+        assert_eq!(r.u8(), Ok(0b10));
+        assert_eq!(r.string(16), Ok("radio".to_string()));
+    }
+
+    #[test]
+    fn a_locational_frame_names_its_volume_category() {
+        let s = world();
+        let frames = s.locational_frames(0x5151, "minecraft:overworld", [0.5, -60.0, 0.5], 16.0, &[9], 3, Some("radio"));
+        let plain = open_for(&[1; 16], &frames[0].1);
+        let mut r = Reader::new(&plain[33..]);
+        assert_eq!(r.bytes(1024), Ok(&[9u8][..]));
+        assert_eq!(r.i64(), Ok(3));
+        assert_eq!(r.i32().map(|b| f32::from_bits(b as u32)), Ok(16.0));
+        assert_eq!(r.u8(), Ok(0b10));
+        assert_eq!(r.string(16), Ok("radio".to_string()));
+    }
+
+    // An unregistered category is refused (nothing is sent), a registered one is accepted.
+    #[test]
+    fn only_registered_categories_may_be_named() {
+        assert!(register_category("radio_test_cat", "Radio", "Adjust the lobby radio volume.", None));
+        assert!(category_known(&registry(), Some("radio_test_cat")));
+        assert!(!category_known(&registry(), Some("never_registered")));
+        assert!(unregister_category("radio_test_cat"));
     }
 }

@@ -110,7 +110,7 @@ mod raw {
         "voicechat:set_group",
         "voicechat:update_state",
     ];
-    pub const CLIENTBOUND: [&str; 7] = [
+    pub const CLIENTBOUND: [&str; 9] = [
         "voicechat:state",
         "voicechat:states",
         "voicechat:remove_state",
@@ -118,6 +118,8 @@ mod raw {
         "voicechat:remove_group",
         "voicechat:joined_group",
         "voicechat:secret",
+        "voicechat:add_category",
+        "voicechat:remove_category",
     ];
 
     /// One serverbound channel: the bytes a client sent on it go to the core, as `net_from_client` did.

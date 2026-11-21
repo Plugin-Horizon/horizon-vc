@@ -362,6 +362,9 @@ impl State {
                         self.send(player, "voicechat:add_group", p::add_group(&g));
                     }
                 }
+                for c in api::categories() {
+                    self.send(player, "voicechat:add_category", p::add_category(&c.id, &c.name, &c.description, c.icon.as_deref()));
+                }
                 let secret = self.secret_for(player).expect("just added");
                 self.send(player, "voicechat:secret", secret);
             }

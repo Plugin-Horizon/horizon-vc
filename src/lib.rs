@@ -37,6 +37,7 @@ struct Seen {
     pos: [f64; 3],
     level: u8,
     spectator: bool,
+    watching: Option<u128>,
 }
 
 fn log(line: &str) {
@@ -86,6 +87,13 @@ fn seen(host: &mut dyn ServerHost) -> Vec<Seen> {
         ) else {
             continue;
         };
+        let spectator = player.is_spectator(&*host).unwrap_or(false);
+        // The player a spectator watches: the spectated entity's uuid (only players count in the core).
+        let watching = if spectator {
+            player.spectator_target(&*host).flatten().and_then(|e| e.uuid(host))
+        } else {
+            None
+        };
         out.push(Seen {
             player,
             uuid: player.uuid(),
@@ -93,7 +101,8 @@ fn seen(host: &mut dyn ServerHost) -> Vec<Seen> {
             dimension: dimension.to_string(),
             pos,
             level: player.permission_level(&*host).unwrap_or(0),
-            spectator: player.is_spectator(&*host).unwrap_or(false),
+            spectator,
+            watching,
         });
     }
     out
@@ -265,6 +274,7 @@ impl Hooks for Mod {
                 pos: s.pos,
                 level: s.level,
                 spectator: s.spectator,
+                watching: s.watching,
                 // The channels the client announced in `minecraft:register` decide.
                 has_mod: raw::has_mod(read, s.player),
             })

@@ -34,6 +34,8 @@ pub struct Guest<'a> {
     pub level: u8,
     /// Game mode 3: the player is a spectator.
     pub spectator: bool,
+    /// The player this spectator is watching (spectator mode, camera on a player), if any.
+    pub watching: Option<u128>,
     /// Whether the client registered a `voicechat:` plugin channel, i.e. has the voice chat mod
     /// (`native_player_channels`).
     pub has_mod: bool,
@@ -259,6 +261,21 @@ impl State {
             );
             self.send(g.uuid, "minecraft:register", p::register_payload());
             self.broadcast_state(g.uuid);
+        }
+        if self.cfg.spectator_player_possession {
+            // A spectator watching a player counts as that player: same position and dimension.
+            for g in guests {
+                let target = g.watching.filter(|_| g.spectator);
+                let Some(t) = target.and_then(|t| guests.iter().find(|x| x.uuid == t)) else {
+                    continue;
+                };
+                if let Some(o) = self.online.get_mut(&g.uuid) {
+                    o.pos = t.pos;
+                    if o.dimension != t.dimension {
+                        o.dimension = t.dimension.to_owned();
+                    }
+                }
+            }
         }
         let gone: Vec<u128> = self
             .online
@@ -758,6 +775,7 @@ mod tests {
                 pos: [0.5, -60.0, 0.5],
                 level: 0,
                 spectator: false,
+                watching: None,
                 has_mod: false,
             },
             Guest {
@@ -767,6 +785,7 @@ mod tests {
                 pos: [xb, -60.0, 0.5],
                 level: 0,
                 spectator: false,
+                watching: None,
                 has_mod: false,
             },
         ]
@@ -1125,6 +1144,41 @@ mod tests {
                 want,
                 "spectator_interaction={interaction}"
             );
+        }
+    }
+
+    #[test]
+    fn a_spectator_watching_a_player_counts_at_that_players_place_with_possession_on() {
+        let now = Instant::now();
+        let from: SocketAddr = "127.0.0.1:40000".parse().unwrap();
+        let mut mic = vec![id::MIC, 2, 7, 7];
+        mic.extend(5i64.to_be_bytes());
+        mic.push(0);
+        for (possession, want) in [(false, 0usize), (true, 1)] {
+            let mut s = State::new(
+                Config {
+                    spectator_interaction: true,
+                    spectator_player_possession: possession,
+                    ..Config::default()
+                },
+                25666,
+            );
+            let [sa, _] = connected(&mut s, now);
+            // B is far away from A; A spectates B.
+            let mut g = guests(500.5);
+            g[0].spectator = true;
+            g[0].watching = Some(B);
+            s.tick(&g);
+            assert_eq!(
+                s.datagram(&client_frame(A, &sa, &mic), from, now).len(),
+                want,
+                "spectator_player_possession={possession}"
+            );
+            // Back in survival, A is at its own place again.
+            g[0].spectator = false;
+            g[0].watching = None;
+            s.tick(&g);
+            assert_eq!(s.online[&A].pos, [0.5, -60.0, 0.5]);
         }
     }
 

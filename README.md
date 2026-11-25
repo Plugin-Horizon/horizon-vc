@@ -83,7 +83,7 @@ it), more than three players, Bedrock players, high packet rates.
 
 ## Not supported yet
 
-- `spectator_player_possession`: needs the player a spectator watches, which Horizon does not expose (API gap, see the audit's GAPS_UPSTREAM).
+- `spectator_player_possession`: implemented (a spectator watching a player counts at that player's place and dimension).
 - `allow_pings` (external pings): the public wiki says the server should answer them, but not how (the packet is not documented).
 - `use_natives`: loads native libraries on dedicated servers; nothing to load on Horizon.
 - `threaded_server_support`: read, unused (the default is `true` on Paper, Horizon has no Folia-style threads to support).

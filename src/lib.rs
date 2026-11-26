@@ -19,7 +19,7 @@ use mod_api::{
     Text,
 };
 use mod_api::text::{TextClick, TextStyle};
-use mod_api::{IPayloadContext, IPayloadHandler, PayloadBytes, PayloadId};
+use mod_api::{IPayloadContext, IPayloadHandler, ModServiceCallEvent, ModServiceError, PayloadBytes, PayloadId};
 use std::sync::Arc;
 
 /// The root words of the usages in `USAGES`: `/voicechat` and its aliases `/horizonvc`, `/hvc`.
@@ -259,6 +259,15 @@ impl Hooks for Mod {
         Flow::Cancel
     }
 
+    /// The service other mods call: `voicechat:api` (`horizonvc_core::api::handle`).
+    fn mod_service_call(&self, _: &mut dyn ServerHost, event: &mut ModServiceCallEvent<'_>) -> Option<PayloadBytes> {
+        if event.service != "voicechat:api" {
+            return None;
+        }
+        let text = std::str::from_utf8(&event.payload.0).ok()?;
+        crate::horizonvc_core::api::handle(text).map(|reply| PayloadBytes(reply.into_bytes()))
+    }
+
     fn server_tick(&self, host: &mut dyn ServerHost, event: &mut ServerTickEvent<'_>) {
         if !matches!(event.phase, ServerTickPhase::ServerTickEnd { .. }) {
             return;
@@ -303,6 +312,26 @@ impl Hooks for Mod {
                         let _ = s.player.disconnect(host, Text::literal(text));
                     }
                 }
+            }
+        }
+        deliver_events(host);
+    }
+}
+
+/// Tells the mods that subscribed what the voice chat did since the last tick: each gets one call of its service
+/// `<id>:voicechat_event` per event line. A mod that is gone is dropped from the list.
+fn deliver_events(host: &mut dyn ServerHost) {
+    use crate::horizonvc_core::api;
+    let lines = api::take_events();
+    if lines.is_empty() {
+        return;
+    }
+    for id in api::subscribers() {
+        let service = format!("{id}:voicechat_event");
+        for line in &lines {
+            if let Err(ModServiceError::ProviderNotLoaded) = host.commands().call_mod_service(&service, line.as_bytes()) {
+                api::unsubscribe(&id);
+                break;
             }
         }
     }

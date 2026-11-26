@@ -96,6 +96,10 @@ pub struct Group {
     pub name: String,
     pub password: Option<String>,
     pub kind: i16,
+    /// Kept when the last member leaves (made through the API).
+    pub persistent: bool,
+    /// Sent to the clients but not listed in their group menu (`Group.Builder.setHidden`).
+    pub hidden: bool,
 }
 
 pub const NORMAL: i16 = 0;
@@ -104,13 +108,13 @@ pub const ISOLATED: i16 = 2;
 
 pub fn add_group(g: &Group) -> Vec<u8> {
     let mut w = Writer::default();
-    // The two flags after the password one are always false (HorizonVC has no hidden or
-    // config-made groups).
+    // Captured from a real server and client (tests/fixtures/captures): id, name, then the flags password,
+    // persistent, hidden, then the type.
     w.uuid(g.id)
         .string(&g.name)
         .bool(g.password.is_some())
-        .bool(false)
-        .bool(false)
+        .bool(g.persistent)
+        .bool(g.hidden)
         .i16(g.kind);
     w.0
 }
@@ -182,6 +186,8 @@ pub mod id {
     pub const MIC: u8 = 1;
     pub const PLAYER_SOUND: u8 = 2;
     pub const GROUP_SOUND: u8 = 3;
+    /// A locational audio channel's sound: the source position travels in the packet.
+    pub const LOCATIONAL_SOUND: u8 = 4;
     pub const AUTHENTICATE: u8 = 5;
     pub const AUTHENTICATE_ACK: u8 = 6;
     pub const KEEP_ALIVE: u8 = 8;
@@ -263,16 +269,41 @@ pub fn sound_in(
     w.0
 }
 
-/// `voicechat:add_category`: the slider a client shows for a volume category. The id and the name are
-/// strings, the description and the icon are each a flag byte and then the value (the icon: 256 ARGB ints).
+/// The sound of a locational audio channel (`createLocationalAudioChannel`), as a real server sends it: the id, the
+/// channel id twice, the source position (three f64), the audio, the sequence number, the distance (f32) and the
+/// closing flags byte (bit 0b10: a category string follows).
+pub fn locational_sound(
+    channel: u128,
+    pos: [f64; 3],
+    audio: &[u8],
+    sequence: i64,
+    distance: f32,
+    category: Option<&str>,
+) -> Vec<u8> {
+    let mut w = Writer::default();
+    w.u8(id::LOCATIONAL_SOUND).uuid(channel).uuid(channel);
+    w.f64(pos[0]).f64(pos[1]).f64(pos[2]);
+    w.bytes(audio).i64(sequence).f32(distance);
+    w.u8(if category.is_some() { SOUND_HAS_CATEGORY } else { 0 });
+    if let Some(category) = category {
+        w.string(category);
+    }
+    w.0
+}
+
+/// `voicechat:add_category`: the slider a client shows for a volume category. As captured from a real server: the id and
+/// the name (strings), a flag byte (always 0 in the captures, meaning unknown), the description (a flag byte and then
+/// the string), a second flag byte (0, unknown), and the icon (a flag byte and then 256 ARGB ints, row by row of the
+/// `int[x][y]` the API takes).
 pub fn add_category(id: &str, name: &str, description: &str, icon: Option<&[i32]>) -> Vec<u8> {
     let mut w = Writer::default();
-    w.string(id).string(name);
+    w.string(id).string(name).bool(false);
     if description.is_empty() {
         w.bool(false);
     } else {
         w.bool(true).string(description);
     }
+    w.bool(false);
     match icon {
         Some(pixels) => {
             w.bool(true);
@@ -370,6 +401,8 @@ mod tests {
             name: "t1".into(),
             password: None,
             kind: OPEN,
+            persistent: false,
+            hidden: false,
         };
         assert_eq!(
             add_group(&g),
@@ -380,6 +413,8 @@ mod tests {
             name: "pw".into(),
             password: Some("x".into()),
             kind: NORMAL,
+            persistent: false,
+            hidden: false,
         };
         assert_eq!(
             add_group(&p),
@@ -446,10 +481,12 @@ mod tests {
         want.extend(b"radio");
         want.push(5);
         want.extend(b"Radio");
+        want.push(0); // the first unknown flag (captured as 0)
         want.push(1);
         want.push(30);
         want.extend(b"Adjust the lobby radio volume.");
-        want.push(0);
+        want.push(0); // the second unknown flag
+        want.push(0); // no icon
         assert_eq!(add_category("radio", "Radio", "Adjust the lobby radio volume.", None), want);
         assert_eq!(remove_category("radio"), [5, b'r', b'a', b'd', b'i', b'o']);
     }

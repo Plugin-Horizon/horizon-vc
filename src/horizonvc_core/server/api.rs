@@ -30,32 +30,28 @@ pub fn connection_of(player: u128) -> Option<Connection> {
     .flatten()
 }
 
-/// Every group: id, name, has a password, type (0 normal, 1 open, 2 isolated), persistent.
-pub fn groups() -> Vec<(u128, String, bool, i16, bool)> {
+/// Every group the voice server knows: id, name, has a password, type (0 normal, 1 open, 2 isolated),
+/// persistent, hidden. (A non-persistent group the API built is not among them until its first player joins.)
+pub fn groups() -> Vec<(u128, String, bool, i16, bool, bool)> {
     with_state(|s| {
         s.groups
             .iter()
-            .map(|g| {
-                (
-                    g.id,
-                    g.name.clone(),
-                    g.password.is_some(),
-                    g.kind,
-                    s.persistent.contains(&g.id),
-                )
-            })
+            .map(|g| (g.id, g.name.clone(), g.password.is_some(), g.kind, g.persistent, g.hidden))
             .collect()
     })
     .unwrap_or_default()
 }
 
-/// `groupBuilder()...build()`: a new group, announced to every client. A persistent group stays when nobody is
-/// in it; another one disappears once its last member leaves (and is announced when its first player is added, which `set_group` does).
+/// `groupBuilder()...build()`: a new group. A persistent group is announced to every client at once and stays when
+/// nobody is in it. Any other group comes to be, and is announced, when its first player is added (`set_group`),
+/// and disappears once its last member leaves (a real server behaves so: its `getGroups()` does not list it before).
+/// A hidden group is announced but left out of the clients' group menu.
 pub fn create_group(
     name: &str,
     password: Option<&str>,
     kind: i16,
     persistent: bool,
+    hidden: bool,
 ) -> Option<u128> {
     if !(p::NORMAL..=p::ISOLATED).contains(&kind) || name.trim().is_empty() {
         return None;
@@ -69,13 +65,18 @@ pub fn create_group(
             name: name.into(),
             password: password.map(str::to_string),
             kind,
+            persistent,
+            hidden,
         };
+        let id = g.id;
         if persistent {
-            s.persistent.insert(g.id);
+            s.events.push(event_group("create_group", &g, None));
+            s.broadcast("voicechat:add_group", p::add_group(&g));
+            s.groups.push(g);
+        } else {
+            s.pending.push(g);
         }
-        s.broadcast("voicechat:add_group", p::add_group(&g));
-        s.groups.push(g.clone());
-        g.id
+        id
     })
 }
 
@@ -88,12 +89,16 @@ pub fn remove_group(id: u128) -> bool {
             .filter(|(_, v)| v.group == Some(id))
             .map(|(u, _)| *u)
             .collect();
-        s.persistent.remove(&id);
+        if let Some(g) = s.groups.iter_mut().find(|g| g.id == id) {
+            g.persistent = false;
+        }
         for m in members {
             s.leave(m);
         }
+        s.pending.retain(|g| g.id != id);
         if let Some(i) = s.groups.iter().position(|g| g.id == id) {
-            s.groups.remove(i);
+            let g = s.groups.remove(i);
+            s.events.push(event_group("remove_group", &g, None));
             s.broadcast("voicechat:remove_group", p::remove_group(id));
         }
         true
@@ -193,6 +198,134 @@ pub fn send_locational(
     .unwrap_or(0)
 }
 
+// ---- Events (the public API's events, as lines for the mods that subscribed) ----
+
+/// A UUID as dashed text.
+pub fn uuid_text(id: u128) -> String {
+    let h = format!("{id:032x}");
+    format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
+}
+
+/// A UUID with or without dashes.
+pub fn parse_uuid(s: &str) -> Option<u128> {
+    let plain: String = s.chars().filter(|c| *c != '-').collect();
+    (plain.len() == 32).then(|| u128::from_str_radix(&plain, 16).ok()).flatten()
+}
+
+fn type_name(kind: i16) -> &'static str {
+    match kind {
+        p::OPEN => "OPEN",
+        p::ISOLATED => "ISOLATED",
+        _ => "NORMAL",
+    }
+}
+
+fn parse_type(name: &str) -> Option<i16> {
+    match name.to_ascii_uppercase().as_str() {
+        "NORMAL" => Some(p::NORMAL),
+        "OPEN" => Some(p::OPEN),
+        "ISOLATED" => Some(p::ISOLATED),
+        _ => None,
+    }
+}
+
+/// `PlayerStateChangedEvent`: player, disabled, disconnected.
+pub fn event_player_state(player: u128, disabled: bool, disconnected: bool) -> String {
+    format!("player_state\t{}\t{disabled}\t{disconnected}", uuid_text(player))
+}
+
+/// `PlayerConnectedEvent` (`player_connected`) and `PlayerDisconnectedEvent` (`player_disconnected`): player.
+pub fn event_player(kind: &str, player: u128) -> String {
+    format!("{kind}\t{}", uuid_text(player))
+}
+
+/// `CreateGroupEvent` (`create_group`), `JoinGroupEvent` (`join_group`), `LeaveGroupEvent` (`leave_group`) and
+/// `RemoveGroupEvent` (`remove_group`): group id, name, has a password, type name, persistent, hidden, then the
+/// player (empty when no player made it: the API created or removed the group).
+pub fn event_group(kind: &str, g: &Group, player: Option<u128>) -> String {
+    format!(
+        "{kind}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+        uuid_text(g.id),
+        g.name,
+        g.password.is_some(),
+        type_name(g.kind),
+        g.persistent,
+        g.hidden,
+        player.map(uuid_text).unwrap_or_default()
+    )
+}
+
+/// The events since the last call, oldest first.
+pub fn take_events() -> Vec<String> {
+    with_state(|s| std::mem::take(&mut s.events)).unwrap_or_default()
+}
+
+/// The mods that get the events (see `handle`, `subscribe`).
+pub fn subscribers() -> Vec<String> {
+    with_state(|s| s.subscribers.clone()).unwrap_or_default()
+}
+
+pub fn subscribe(id: &str) -> bool {
+    with_state(|s| {
+        if !s.subscribers.iter().any(|m| m == id) {
+            s.subscribers.push(id.to_owned());
+        }
+    })
+    .is_some()
+}
+
+pub fn unsubscribe(id: &str) {
+    with_state(|s| s.subscribers.retain(|m| m != id));
+}
+
+/// Answers one call of the mod service `voicechat:api`: `<op>` then its arguments, tab-separated; one text line back
+/// (`true`/`false`, a UUID, or `none`); None for an operation or arguments it does not know.
+///
+/// Operations: `version`, `subscribe <mod id>`, `unsubscribe <mod id>`, `groups` (one line per group, as the group
+/// events carry the group, newline-separated), `create_group <name> <NORMAL|OPEN|ISOLATED> <persistent> <hidden>
+/// [password]`, `remove_group <uuid>`, `set_group <player uuid> <group uuid|none>`, `register_category <id> <name>
+/// <description>`, `unregister_category <id>`. A subscribed mod's own service `<mod id>:voicechat_event` is called
+/// with one event line per event: `player_state`, `player_connected`, `player_disconnected`, `create_group`,
+/// `join_group`, `leave_group`, `remove_group`, `category_registered`, `category_unregistered`.
+pub fn handle(payload: &str) -> Option<String> {
+    let mut parts = payload.split('\t');
+    let op = parts.next()?;
+    let a: Vec<&str> = parts.collect();
+    let word = |i: usize| a.get(i).copied();
+    let flag = |v: bool| v.to_string();
+    let truth = |i: usize| word(i).map(|w| w == "true");
+    Some(match op {
+        "version" => "0".into(),
+        "subscribe" => flag(subscribe(word(0)?)),
+        "unsubscribe" => {
+            unsubscribe(word(0)?);
+            "true".into()
+        }
+        "groups" => groups()
+            .into_iter()
+            .map(|(id, name, pw, kind, persistent, hidden)| {
+                format!("{}\t{name}\t{pw}\t{}\t{persistent}\t{hidden}", uuid_text(id), type_name(kind))
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        "create_group" => match create_group(word(0)?, word(4), parse_type(word(1)?)?, truth(2)?, truth(3)?) {
+            Some(id) => uuid_text(id),
+            None => "none".into(),
+        },
+        "remove_group" => flag(remove_group(parse_uuid(word(0)?)?)),
+        "set_group" => {
+            let group = match word(1)? {
+                "none" => None,
+                id => Some(parse_uuid(id)?),
+            };
+            flag(set_group(parse_uuid(word(0)?)?, group))
+        }
+        "register_category" => flag(register_category(word(0)?, word(1)?, word(2)?, None)),
+        "unregister_category" => flag(unregister_category(word(0)?)),
+        _ => return None,
+    })
+}
+
 /// A volume category (`VolumeCategory`): the slider a client shows for the sounds in it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Category {
@@ -281,7 +414,10 @@ pub fn register_category(id: &str, name: &str, description: &str, icon: Option<&
     let ok = registry().register(id, name, description, icon);
     if ok {
         // Players already connected get the slider at once (`VoicechatServerApi.registerVolumeCategory`).
-        with_state(|s| s.broadcast("voicechat:add_category", p::add_category(id, name, description, icon)));
+        with_state(|s| {
+            s.events.push(format!("category_registered\t{id}"));
+            s.broadcast("voicechat:add_category", p::add_category(id, name, description, icon))
+        });
     }
     ok
 }
@@ -290,7 +426,10 @@ pub fn register_category(id: &str, name: &str, description: &str, icon: Option<&
 pub fn unregister_category(id: &str) -> bool {
     let ok = registry().unregister(id);
     if ok {
-        with_state(|s| s.broadcast("voicechat:remove_category", p::remove_category(id)));
+        with_state(|s| {
+            s.events.push(format!("category_unregistered\t{id}"));
+            s.broadcast("voicechat:remove_category", p::remove_category(id))
+        });
     }
     ok
 }
@@ -327,7 +466,8 @@ impl State {
         sequence: i64,
         category: Option<&str>,
     ) -> Vec<(SocketAddr, Vec<u8>)> {
-        let plain = p::sound_in(channel, opus, sequence, Some((distance as f32, false)), category);
+        // The sound of a locational channel carries its source position (a real server's packet, id 4).
+        let plain = p::locational_sound(channel, pos, opus, sequence, distance as f32, category);
         let limit = distance * distance;
         let mut out: Vec<(u128, SocketAddr, Vec<u8>)> = self
             .voicers
@@ -490,10 +630,16 @@ mod tests {
             ]
         );
         let plain = open_for(&[1; 16], &frames[0].1);
-        assert_eq!(plain[0], id::PLAYER_SOUND);
+        // The packet of a locational channel (captured from a real server): id 4, the channel id twice, the source
+        // position, the audio, the sequence, the distance, the flags.
+        assert_eq!(plain[0], id::LOCATIONAL_SOUND);
         assert_eq!(&plain[1..17], &channel.to_be_bytes());
         assert_eq!(&plain[17..33], &channel.to_be_bytes());
         let mut r = Reader::new(&plain[33..]);
+        for want in [0.5f64, -60.0, 0.5] {
+            let bits = (r.i64().unwrap()) as u64;
+            assert_eq!(f64::from_bits(bits), want);
+        }
         assert_eq!(r.bytes(1024), Ok(&[9u8, 9][..]));
         assert_eq!(r.i64(), Ok(3));
         assert_eq!(r.i32().map(|b| f32::from_bits(b as u32)), Ok(16.0));
@@ -530,7 +676,7 @@ mod tests {
         let s = world();
         let frames = s.locational_frames(0x5151, "minecraft:overworld", [0.5, -60.0, 0.5], 16.0, &[9], 3, Some("radio"));
         let plain = open_for(&[1; 16], &frames[0].1);
-        let mut r = Reader::new(&plain[33..]);
+        let mut r = Reader::new(&plain[33 + 24..]);
         assert_eq!(r.bytes(1024), Ok(&[9u8][..]));
         assert_eq!(r.i64(), Ok(3));
         assert_eq!(r.i32().map(|b| f32::from_bits(b as u32)), Ok(16.0));
@@ -545,5 +691,20 @@ mod tests {
         assert!(category_known(&registry(), Some("radio_test_cat")));
         assert!(!category_known(&registry(), Some("never_registered")));
         assert!(unregister_category("radio_test_cat"));
+    }
+
+    #[test]
+    fn the_service_builds_groups_and_names_events_in_order() {
+        assert_eq!(handle("version").as_deref(), Some("0"));
+        assert_eq!(handle("nonsense"), None);
+        assert_eq!(handle("create_group\tx\tSILLY\ttrue\tfalse"), None, "an unknown type");
+        let g = Group { id: 0xab, name: "n".into(), password: Some("p".into()), kind: p::ISOLATED, persistent: true, hidden: true };
+        assert_eq!(
+            event_group("create_group", &g, None),
+            "create_group\t00000000-0000-0000-0000-0000000000ab\tn\ttrue\tISOLATED\ttrue\ttrue\t"
+        );
+        assert_eq!(event_player_state(1, true, false), "player_state\t00000000-0000-0000-0000-000000000001\ttrue\tfalse");
+        assert_eq!(parse_uuid("00000000-0000-0000-0000-0000000000ab"), Some(0xab));
+        assert_eq!(parse_uuid("zz"), None);
     }
 }

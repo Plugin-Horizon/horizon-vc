@@ -29,5 +29,4 @@ Answer texts and colours are HorizonVC's own and open to taste:
 
 ## Not supported yet
 
-- Hidden groups: the position of the hidden flag in `voicechat:add_group` is not in the public docs.
-- `allow_pings`: the external ping packet is undocumented. `use_natives`, `threaded_server_support`: nothing to switch.
+- `allow_pings`: the external ping packet is undocumented and was not seen in the 2026-11-25 captures (see CLEANROOM.md). `use_natives`, `threaded_server_support`: nothing to switch.

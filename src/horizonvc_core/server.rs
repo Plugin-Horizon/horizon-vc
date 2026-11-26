@@ -1069,6 +1069,19 @@ mod tests {
     }
 
     #[test]
+    fn a_player_without_the_mod_gets_the_needed_line_even_for_help() {
+        let now = Instant::now();
+        let mut s = State::new(Config::default(), 25666);
+        connected(&mut s, now);
+        let stranger = 0xC0FFEE_u128;
+        let needed = Some(vec!["You need to have Simple Voice Chat installed on your client to use this command".to_owned()]);
+        for line in ["voicechat", "voicechat help", "hvc", "horizonvc test x", "voicechat join team"] {
+            assert_eq!(s.command(stranger, line), needed, "{line}");
+        }
+        assert_eq!(s.command(stranger, "gamemode 1"), None);
+    }
+
+    #[test]
     fn persistent_groups_stay_and_permissions_apply() {
         let now = Instant::now();
         let mut s = State::new(Config::default(), 25666);

@@ -79,13 +79,14 @@ impl State {
         let sub = words.next().map(str::to_ascii_lowercase);
         let args: Vec<&str> = words.collect();
         let reply = |s: &str| Some(vec![s.to_string()]);
+        // The original answers every form, help included, with this line to a client that did not announce the mod.
+        if !self.voicers.contains_key(&player) {
+            return reply(&self.texts.command_needed());
+        }
         let sub = match sub.as_deref() {
             None | Some("help") => return Some(HELP.iter().map(|s| s.to_string()).collect()),
             Some(s) => s.to_string(),
         };
-        if !self.voicers.contains_key(&player) {
-            return reply(&self.texts.command_needed());
-        }
         match (sub.as_str(), &args[..]) {
             ("test", [name]) => {
                 if !self.may(player, "voicechat.admin") {

@@ -1,6 +1,6 @@
 id = "horizonvc"
 name = "HorizonVC"
-version = "1.001.0"
+version = "1.1.0"
 description = "Simple Voice Chat server (clean-room, protocol 20): proximity voice, groups, /voicechat. The UDP server is horizonvc-core; this mod is the engine glue."
 authors = ["LionSpacer"]
 api = "0.2"

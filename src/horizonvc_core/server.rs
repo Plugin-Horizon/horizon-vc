@@ -34,6 +34,8 @@ pub struct Guest<'a> {
     pub level: u8,
     /// Game mode 3: the player is a spectator.
     pub spectator: bool,
+    /// The player this spectator is watching (spectator mode, camera on a player), if any.
+    pub watching: Option<u128>,
     /// Whether the client registered a `voicechat:` plugin channel, i.e. has the voice chat mod
     /// (`native_player_channels`).
     pub has_mod: bool,
@@ -106,10 +108,14 @@ pub struct State {
     online: HashMap<u128, Online>,
     voicers: HashMap<u128, Voicer>,
     groups: Vec<Group>,
+    /// Groups the API built that are not persistent: not announced and not listed until a first player joins.
+    pending: Vec<Group>,
     outbox: Vec<Out>,
     socket: Option<UdpSocket>,
-    /// Groups kept when empty (made through the API).
-    persistent: HashSet<u128>,
+    /// The API events since a mod last took them (`api::take_events`), one line each.
+    events: Vec<String>,
+    /// The mods that subscribed to the events (`api::subscribe`).
+    subscribers: Vec<String>,
     /// (player, group): invitations, which join without the password.
     invites: HashSet<(u128, u128)>,
     permissions: PermissionCheck,
@@ -141,9 +147,11 @@ impl State {
             online: HashMap::new(),
             voicers: HashMap::new(),
             groups: Vec::new(),
+            pending: Vec::new(),
             outbox: Vec::new(),
             socket: None,
-            persistent: HashSet::new(),
+            events: Vec::new(),
+            subscribers: Vec::new(),
             invites: HashSet::new(),
             permissions: default_permissions,
             mic_listeners: Vec::new(),
@@ -193,7 +201,9 @@ impl State {
     }
 
     fn broadcast_state(&mut self, uuid: u128) {
-        let s = p::state(&self.state_of(uuid));
+        let st = self.state_of(uuid);
+        self.events.push(api::event_player_state(uuid, st.disabled, st.disconnected));
+        let s = p::state(&st);
         self.broadcast("voicechat:state", s);
     }
 
@@ -202,11 +212,11 @@ impl State {
     fn remove_empty_groups(&mut self) {
         let (keep, gone): (Vec<Group>, Vec<Group>) =
             std::mem::take(&mut self.groups).into_iter().partition(|g| {
-                self.persistent.contains(&g.id)
-                    || self.voicers.values().any(|v| v.group == Some(g.id))
+                g.persistent || self.voicers.values().any(|v| v.group == Some(g.id))
             });
         self.groups = keep;
         for g in gone {
+            self.events.push(api::event_group("remove_group", &g, None));
             self.broadcast("voicechat:remove_group", p::remove_group(g.id));
         }
     }
@@ -260,6 +270,21 @@ impl State {
             self.send(g.uuid, "minecraft:register", p::register_payload());
             self.broadcast_state(g.uuid);
         }
+        if self.cfg.spectator_player_possession {
+            // A spectator watching a player counts as that player: same position and dimension.
+            for g in guests {
+                let target = g.watching.filter(|_| g.spectator);
+                let Some(t) = target.and_then(|t| guests.iter().find(|x| x.uuid == t)) else {
+                    continue;
+                };
+                if let Some(o) = self.online.get_mut(&g.uuid) {
+                    o.pos = t.pos;
+                    if o.dimension != t.dimension {
+                        o.dimension = t.dimension.to_owned();
+                    }
+                }
+            }
+        }
         let gone: Vec<u128> = self
             .online
             .keys()
@@ -270,6 +295,7 @@ impl State {
             self.online.remove(&uuid);
             if self.voicers.remove(&uuid).is_some() {
                 log(&format!("Disconnecting client {:032x}", uuid));
+                self.events.push(api::event_player("player_disconnected", uuid));
             }
             self.invites.retain(|(p, _)| *p != uuid);
             self.broadcast("voicechat:remove_state", p::remove_state(uuid));
@@ -357,6 +383,11 @@ impl State {
                 all.sort();
                 let states: Vec<PlayerState> = all.into_iter().map(|u| self.state_of(u)).collect();
                 self.send(player, "voicechat:states", p::states(&states));
+                // The order of a real server: the volume categories, then the groups (hidden ones too: the
+                // client leaves them out of its menu).
+                for c in api::categories() {
+                    self.send(player, "voicechat:add_category", p::add_category(&c.id, &c.name, &c.description, c.icon.as_deref()));
+                }
                 if self.cfg.enable_groups {
                     for g in self.groups.clone() {
                         self.send(player, "voicechat:add_group", p::add_group(&g));
@@ -387,10 +418,14 @@ impl State {
                     name,
                     password,
                     kind,
+                    persistent: false,
+                    hidden: false,
                 };
+                self.events.push(api::event_group("create_group", &g, Some(player)));
                 self.broadcast("voicechat:add_group", p::add_group(&g));
                 self.groups.push(g.clone());
                 self.voicers.get_mut(&player).unwrap().group = Some(g.id);
+                self.events.push(api::event_group("join_group", &g, Some(player)));
                 self.broadcast_state(player);
                 self.send(
                     player,
@@ -408,7 +443,7 @@ impl State {
     /// A voice chat player joins a group (`voicechat:set_group`, `/horizonvc join`, the API). An invitation to it
     /// stands in for the password.
     fn join(&mut self, player: u128, id: u128, password: Option<String>) -> Result<(), Join> {
-        let Some(g) = self.groups.iter().find(|g| g.id == id) else {
+        let Some(g) = self.groups.iter().chain(self.pending.iter()).find(|g| g.id == id) else {
             return Err(Join::NoGroup);
         };
         let invited = self.invites.remove(&(player, id));
@@ -420,10 +455,20 @@ impl State {
             );
             return Err(Join::WrongPassword);
         }
-        let Some(v) = self.voicers.get_mut(&player) else {
+        if !self.voicers.contains_key(&player) {
             return Err(Join::NoMod);
-        };
-        v.group = Some(id);
+        }
+        // A group the API built without `persistent` comes to be with its first member.
+        if let Some(at) = self.pending.iter().position(|g| g.id == id) {
+            let g = self.pending.remove(at);
+            self.events.push(api::event_group("create_group", &g, None));
+            self.broadcast("voicechat:add_group", p::add_group(&g));
+            self.groups.push(g);
+        }
+        if let Some(g) = self.groups.iter().find(|g| g.id == id).cloned() {
+            self.events.push(api::event_group("join_group", &g, Some(player)));
+        }
+        self.voicers.get_mut(&player).expect("checked").group = Some(id);
         self.broadcast_state(player);
         self.send(
             player,
@@ -437,7 +482,10 @@ impl State {
         let Some(v) = self.voicers.get_mut(&player) else {
             return;
         };
-        v.group = None;
+        let left = v.group.take();
+        if let Some(g) = left.and_then(|id| self.groups.iter().find(|g| g.id == id)).cloned() {
+            self.events.push(api::event_group("leave_group", &g, Some(player)));
+        }
         self.broadcast_state(player);
         self.send(
             player,
@@ -493,6 +541,7 @@ impl State {
                         "Player {name} ({uuid:032x}) successfully connected to voice chat"
                     ));
                     self.broadcast_state(uuid);
+                    self.events.push(api::event_player("player_connected", uuid));
                 }
             }
             Voice::Mic {
@@ -726,6 +775,16 @@ pub fn command(player: u128, line: &str) -> Option<Vec<String>> {
         .unwrap_or_else(|| Some(vec!["The voice chat server is not running.".to_string()]))
 }
 
+/// `%voicechat_<params>%` for `player` (the placeholderapi mod's request through the `voicechat:placeholder` service).
+pub fn placeholder(player: u128, params: &str) -> Option<String> {
+    with_state(|s| {
+        let has_mod = s.online.get(&player).is_some_and(|o| o.has_mod);
+        let disabled = s.voicers.get(&player).is_some_and(|v| v.disabled);
+        s.texts.placeholder(params, has_mod, disabled)
+    })
+    .flatten()
+}
+
 /// Whether `player`'s client registered a `voicechat:` channel (has the voice chat mod), as of the last tick.
 pub fn client_has_mod(player: u128) -> bool {
     with_state(|s| s.online.get(&player).is_some_and(|o| o.has_mod)).unwrap_or(false)
@@ -755,6 +814,7 @@ mod tests {
                 pos: [0.5, -60.0, 0.5],
                 level: 0,
                 spectator: false,
+                watching: None,
                 has_mod: false,
             },
             Guest {
@@ -764,6 +824,7 @@ mod tests {
                 pos: [xb, -60.0, 0.5],
                 level: 0,
                 spectator: false,
+                watching: None,
                 has_mod: false,
             },
         ]
@@ -1018,16 +1079,30 @@ mod tests {
     }
 
     #[test]
+    fn a_player_without_the_mod_gets_the_needed_line_even_for_help() {
+        let now = Instant::now();
+        let mut s = State::new(Config::default(), 25666);
+        connected(&mut s, now);
+        let stranger = 0xC0FFEE_u128;
+        let needed = Some(vec!["You need to have Simple Voice Chat installed on your client to use this command".to_owned()]);
+        for line in ["voicechat", "voicechat help", "hvc", "horizonvc test x", "voicechat join team"] {
+            assert_eq!(s.command(stranger, line), needed, "{line}");
+        }
+        assert_eq!(s.command(stranger, "gamemode 1"), None);
+    }
+
+    #[test]
     fn persistent_groups_stay_and_permissions_apply() {
         let now = Instant::now();
         let mut s = State::new(Config::default(), 25666);
         let [sa, _] = connected(&mut s, now);
-        s.persistent.insert(77);
         s.groups.push(Group {
             id: 77,
             name: "kept".into(),
             password: None,
             kind: p::OPEN,
+            persistent: true,
+            hidden: false,
         });
         assert!(s.join(A, 77, None).is_ok());
         s.leave(A);
@@ -1126,6 +1201,41 @@ mod tests {
     }
 
     #[test]
+    fn a_spectator_watching_a_player_counts_at_that_players_place_with_possession_on() {
+        let now = Instant::now();
+        let from: SocketAddr = "127.0.0.1:40000".parse().unwrap();
+        let mut mic = vec![id::MIC, 2, 7, 7];
+        mic.extend(5i64.to_be_bytes());
+        mic.push(0);
+        for (possession, want) in [(false, 0usize), (true, 1)] {
+            let mut s = State::new(
+                Config {
+                    spectator_interaction: true,
+                    spectator_player_possession: possession,
+                    ..Config::default()
+                },
+                25666,
+            );
+            let [sa, _] = connected(&mut s, now);
+            // B is far away from A; A spectates B.
+            let mut g = guests(500.5);
+            g[0].spectator = true;
+            g[0].watching = Some(B);
+            s.tick(&g);
+            assert_eq!(
+                s.datagram(&client_frame(A, &sa, &mic), from, now).len(),
+                want,
+                "spectator_player_possession={possession}"
+            );
+            // Back in survival, A is at its own place again.
+            g[0].spectator = false;
+            g[0].watching = None;
+            s.tick(&g);
+            assert_eq!(s.online[&A].pos, [0.5, -60.0, 0.5]);
+        }
+    }
+
+    #[test]
     fn the_guests_channels_mark_the_client() {
         let mut s = State::new(Config::default(), 25666);
         let mut g = guests(2.5);
@@ -1134,5 +1244,115 @@ mod tests {
         g[0].has_mod = true;
         s.tick_at(&g, Instant::now());
         assert!(s.online[&A].has_mod && !s.online[&B].has_mod);
+    }
+
+    fn kinds(s: &mut State) -> Vec<String> {
+        std::mem::take(&mut s.events)
+            .into_iter()
+            .map(|l| l.split('\t').next().unwrap().to_owned())
+            .collect()
+    }
+
+    // A group the API built without `persistent` is neither listed nor announced until its first player joins (a
+    // real server's `getGroups()` does not list it before); a hidden one is announced with the hidden flag set.
+    #[test]
+    fn a_group_that_is_not_persistent_comes_to_be_with_its_first_member() {
+        let now = Instant::now();
+        let mut s = State::new(Config::default(), 25666);
+        connected(&mut s, now);
+        s.events.clear();
+        s.pending.push(Group {
+            id: 5,
+            name: "temp".into(),
+            password: None,
+            kind: p::OPEN,
+            persistent: false,
+            hidden: true,
+        });
+        assert!(s.groups.is_empty());
+        assert!(s.join(A, 5, None).is_ok());
+        let out = s.tick(&guests(2.5));
+        assert_eq!(s.groups.len(), 1);
+        assert_eq!(
+            channels(&out, A),
+            vec!["voicechat:add_group", "voicechat:state", "voicechat:joined_group"]
+        );
+        let add = out.iter().find_map(|o| match o {
+            Out::Payload { player: A, channel: "voicechat:add_group", data } => Some(data.clone()),
+            _ => None,
+        });
+        // name "temp", then the flags password, persistent, hidden, then the type OPEN.
+        assert_eq!(&add.unwrap()[16..], &[4, b't', b'e', b'm', b'p', 0, 0, 1, 0, 1]);
+        assert_eq!(kinds(&mut s), ["create_group", "join_group", "player_state"]);
+        s.leave(A);
+        s.tick(&guests(2.5));
+        assert!(s.groups.is_empty(), "gone with its last member");
+        assert_eq!(kinds(&mut s), ["leave_group", "player_state", "remove_group"]);
+    }
+
+    #[test]
+    fn a_persistent_group_stays_and_is_announced_as_persistent() {
+        let now = Instant::now();
+        let mut s = State::new(Config::default(), 25666);
+        connected(&mut s, now);
+        s.events.clear();
+        let id = api_group_for_test(&mut s, true);
+        assert!(s.join(A, id, None).is_ok());
+        s.leave(A);
+        assert_eq!(s.groups.len(), 1);
+        assert_eq!(kinds(&mut s), ["join_group", "player_state", "leave_group", "player_state"]);
+    }
+
+    fn api_group_for_test(s: &mut State, persistent: bool) -> u128 {
+        s.groups.push(Group { id: 9, name: "kept".into(), password: None, kind: p::NORMAL, persistent, hidden: false });
+        9
+    }
+
+    #[test]
+    fn a_group_made_by_a_player_raises_create_join_and_state_events() {
+        let now = Instant::now();
+        let mut s = State::new(Config::default(), 25666);
+        connected(&mut s, now);
+        s.events.clear();
+        let mut create = Writer::default();
+        create.string("g").bool(false).i16(p::NORMAL);
+        s.payload(A, "voicechat:create_group", &create.0, now);
+        let lines = s.events.clone();
+        assert_eq!(kinds(&mut s), ["create_group", "join_group", "player_state"]);
+        let fields: Vec<&str> = lines[0].split('\t').collect();
+        assert_eq!(&fields[2..7], ["g", "false", "NORMAL", "false", "false"]);
+        assert_eq!(fields[7], api::uuid_text(A), "the creator");
+    }
+
+    #[test]
+    fn the_join_burst_puts_the_categories_before_the_groups() {
+        let now = Instant::now();
+        let mut s = State::new(Config::default(), 25666);
+        s.tick(&guests(2.5));
+        assert!(api::register_category("burst_cat", "Burst", "", None));
+        s.groups.push(Group { id: 3, name: "x".into(), password: None, kind: p::NORMAL, persistent: true, hidden: false });
+        s.payload(A, "voicechat:request_secret", &20i32.to_be_bytes(), now);
+        let out = s.tick(&guests(2.5));
+        let order = channels(&out, A);
+        let cat = order.iter().position(|c| *c == "voicechat:add_category").unwrap();
+        let group = order.iter().position(|c| *c == "voicechat:add_group").unwrap();
+        assert!(order.iter().position(|c| *c == "voicechat:states").unwrap() < cat);
+        assert!(cat < group && group < order.iter().position(|c| *c == "voicechat:secret").unwrap());
+        api::unregister_category("burst_cat");
+    }
+
+    #[test]
+    fn connecting_and_leaving_raise_the_player_events() {
+        let now = Instant::now();
+        let mut s = State::new(Config::default(), 25666);
+        connected(&mut s, now);
+        let got = kinds(&mut s);
+        assert!(got.iter().filter(|k| *k == "player_connected").count() == 2, "{got:?}");
+        let before = got.iter().position(|k| k == "player_connected").unwrap();
+        assert_eq!(got[before - 1], "player_state", "the state change comes first");
+        let mut only_b = guests(2.5);
+        only_b.remove(0);
+        s.tick(&only_b);
+        assert!(kinds(&mut s).contains(&"player_disconnected".to_string()));
     }
 }

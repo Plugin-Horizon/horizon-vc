@@ -19,7 +19,7 @@ use mod_api::{
     Text,
 };
 use mod_api::text::{TextClick, TextStyle};
-use mod_api::{IPayloadContext, IPayloadHandler, PayloadBytes, PayloadId};
+use mod_api::{IPayloadContext, IPayloadHandler, ModServiceCallEvent, ModServiceError, PayloadBytes, PayloadId};
 use std::sync::Arc;
 
 /// The root words of the usages in `USAGES`: `/voicechat` and its aliases `/horizonvc`, `/hvc`.
@@ -37,6 +37,7 @@ struct Seen {
     pos: [f64; 3],
     level: u8,
     spectator: bool,
+    watching: Option<u128>,
 }
 
 fn log(line: &str) {
@@ -86,6 +87,13 @@ fn seen(host: &mut dyn ServerHost) -> Vec<Seen> {
         ) else {
             continue;
         };
+        let spectator = player.is_spectator(&*host).unwrap_or(false);
+        // The player a spectator watches: the spectated entity's uuid (only players count in the core).
+        let watching = if spectator {
+            player.spectator_target(&*host).flatten().and_then(|e| e.uuid(host))
+        } else {
+            None
+        };
         out.push(Seen {
             player,
             uuid: player.uuid(),
@@ -93,7 +101,8 @@ fn seen(host: &mut dyn ServerHost) -> Vec<Seen> {
             dimension: dimension.to_string(),
             pos,
             level: player.permission_level(&*host).unwrap_or(0),
-            spectator: player.is_spectator(&*host).unwrap_or(false),
+            spectator,
+            watching,
         });
     }
     out
@@ -110,7 +119,7 @@ mod raw {
         "voicechat:set_group",
         "voicechat:update_state",
     ];
-    pub const CLIENTBOUND: [&str; 7] = [
+    pub const CLIENTBOUND: [&str; 9] = [
         "voicechat:state",
         "voicechat:states",
         "voicechat:remove_state",
@@ -118,6 +127,8 @@ mod raw {
         "voicechat:remove_group",
         "voicechat:joined_group",
         "voicechat:secret",
+        "voicechat:add_category",
+        "voicechat:remove_category",
     ];
 
     /// One serverbound channel: the bytes a client sent on it go to the core, as `net_from_client` did.
@@ -248,6 +259,21 @@ impl Hooks for Mod {
         Flow::Cancel
     }
 
+    /// The service other mods call: `voicechat:api` (`horizonvc_core::api::handle`).
+    fn mod_service_call(&self, _: &mut dyn ServerHost, event: &mut ModServiceCallEvent<'_>) -> Option<PayloadBytes> {
+        let text = std::str::from_utf8(&event.payload.0).ok()?;
+        if event.service == "voicechat:placeholder" {
+            // Payload `<uuid as 32 hex digits, or -> <params>`.
+            let (who, params) = text.split_once(' ')?;
+            let uuid = u128::from_str_radix(who, 16).ok()?;
+            return crate::horizonvc_core::server::placeholder(uuid, params.trim()).map(|v| PayloadBytes(v.into_bytes()));
+        }
+        if event.service != "voicechat:api" {
+            return None;
+        }
+        crate::horizonvc_core::api::handle(text).map(|reply| PayloadBytes(reply.into_bytes()))
+    }
+
     fn server_tick(&self, host: &mut dyn ServerHost, event: &mut ServerTickEvent<'_>) {
         if !matches!(event.phase, ServerTickPhase::ServerTickEnd { .. }) {
             return;
@@ -263,6 +289,7 @@ impl Hooks for Mod {
                 pos: s.pos,
                 level: s.level,
                 spectator: s.spectator,
+                watching: s.watching,
                 // The channels the client announced in `minecraft:register` decide.
                 has_mod: raw::has_mod(read, s.player),
             })
@@ -292,6 +319,49 @@ impl Hooks for Mod {
                     }
                 }
             }
+        }
+        deliver_events(host);
+    }
+}
+
+/// Tells the mods that subscribed what the voice chat did since the last tick: each gets one call of its service
+/// `<id>:voicechat_event` per event line. A mod that is gone is dropped from the list.
+fn deliver_events(host: &mut dyn ServerHost) {
+    use crate::horizonvc_core::api;
+    let lines = api::take_events();
+    if lines.is_empty() {
+        return;
+    }
+    for id in api::subscribers() {
+        let service = format!("{id}:voicechat_event");
+        for line in &lines {
+            if let Err(ModServiceError::ProviderNotLoaded) = host.commands().call_mod_service(&service, line.as_bytes()) {
+                api::unsubscribe(&id);
+                break;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tree_tests {
+    use super::*;
+
+    #[test]
+    fn join_offers_a_uuid_beside_the_group_word_as_paper_does() {
+        // Paper (round 2): 'join <string ask>', 'join <uuid>', 'join <uuid> <string>'.
+        for root in ROOTS {
+            assert!(USAGES.iter().any(|(u, _)| *u == format!("{root} join <id:uuid> [password:text]")), "{root}");
+        }
+    }
+
+    #[test]
+    fn the_sub_commands_of_the_original_are_in_the_tree() {
+        for root in ROOTS {
+            for want in ["help", "test <player:player>", "invite <player:player>", "join <group:word> [password:text]", "leave"] {
+                assert!(USAGES.iter().any(|(u, _)| *u == format!("{root} {want}")), "{root} {want}");
+            }
+            assert!(USAGES.iter().any(|(u, _)| *u == root), "{root}");
         }
     }
 }

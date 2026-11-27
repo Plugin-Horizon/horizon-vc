@@ -13,6 +13,9 @@ pub mod server;
 pub mod translations;
 pub mod wire;
 
+#[cfg(test)]
+mod captured_tests;
+
 pub use server::{
     api, client_has_mod, command, on_payload, tick, Guest, Out, USAGES,
 };

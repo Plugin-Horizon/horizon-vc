@@ -775,6 +775,16 @@ pub fn command(player: u128, line: &str) -> Option<Vec<String>> {
         .unwrap_or_else(|| Some(vec!["The voice chat server is not running.".to_string()]))
 }
 
+/// `%voicechat_<params>%` for `player` (the placeholderapi mod's request through the `voicechat:placeholder` service).
+pub fn placeholder(player: u128, params: &str) -> Option<String> {
+    with_state(|s| {
+        let has_mod = s.online.get(&player).is_some_and(|o| o.has_mod);
+        let disabled = s.voicers.get(&player).is_some_and(|v| v.disabled);
+        s.texts.placeholder(params, has_mod, disabled)
+    })
+    .flatten()
+}
+
 /// Whether `player`'s client registered a `voicechat:` channel (has the voice chat mod), as of the last tick.
 pub fn client_has_mod(player: u128) -> bool {
     with_state(|s| s.online.get(&player).is_some_and(|o| o.has_mod)).unwrap_or(false)

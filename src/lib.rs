@@ -261,10 +261,16 @@ impl Hooks for Mod {
 
     /// The service other mods call: `voicechat:api` (`horizonvc_core::api::handle`).
     fn mod_service_call(&self, _: &mut dyn ServerHost, event: &mut ModServiceCallEvent<'_>) -> Option<PayloadBytes> {
+        let text = std::str::from_utf8(&event.payload.0).ok()?;
+        if event.service == "voicechat:placeholder" {
+            // Payload `<uuid as 32 hex digits, or -> <params>`.
+            let (who, params) = text.split_once(' ')?;
+            let uuid = u128::from_str_radix(who, 16).ok()?;
+            return crate::horizonvc_core::server::placeholder(uuid, params.trim()).map(|v| PayloadBytes(v.into_bytes()));
+        }
         if event.service != "voicechat:api" {
             return None;
         }
-        let text = std::str::from_utf8(&event.payload.0).ok()?;
         crate::horizonvc_core::api::handle(text).map(|reply| PayloadBytes(reply.into_bytes()))
     }
 
@@ -340,6 +346,14 @@ fn deliver_events(host: &mut dyn ServerHost) {
 #[cfg(test)]
 mod tree_tests {
     use super::*;
+
+    #[test]
+    fn join_offers_a_uuid_beside_the_group_word_as_paper_does() {
+        // Paper (round 2): 'join <string ask>', 'join <uuid>', 'join <uuid> <string>'.
+        for root in ROOTS {
+            assert!(USAGES.iter().any(|(u, _)| *u == format!("{root} join <id:uuid> [password:text]")), "{root}");
+        }
+    }
 
     #[test]
     fn the_sub_commands_of_the_original_are_in_the_tree() {

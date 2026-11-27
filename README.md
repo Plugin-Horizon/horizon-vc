@@ -83,13 +83,14 @@ it), more than three players, Bedrock players, high packet rates.
 
 ## Not supported yet
 
-- `spectator_player_possession`: needs the player a spectator watches, which Horizon does not expose (API gap, see the audit's GAPS_UPSTREAM).
-- `allow_pings` (external pings): the public wiki says the server should answer them, but not how (the packet is not documented).
+- `spectator_player_possession`: implemented (a spectator watching a player counts at that player's place and dimension).
+- `allow_pings` (external pings): the public wiki says the server should answer them, but not how; the 2026-11-25 captures of the real client and server show no ping traffic either, so nothing is guessed.
 - `use_natives`: loads native libraries on dedicated servers; nothing to load on Horizon.
 - `threaded_server_support`: read, unused (the default is `true` on Paper, Horizon has no Folia-style threads to support).
-- Hidden groups and the two group flags of `voicechat:add_group` (always false on the wire): the public wiki does not describe them,
-  so they are not guessed. Persistent groups exist server-side only (API).
-- API events beyond the microphone packet, proxy support.
+- Hidden and persistent groups: the flags of `voicechat:add_group` were captured from the real server (CLEANROOM.md); both exist through the API.
+- API events: `horizonvc_core::api` events reach other mods through the service `voicechat:api` (`subscribe <mod id>`), which then gets
+  `<mod id>:voicechat_event` calls (player_state, player_connected, player_disconnected, create/join/leave/remove_group, category events).
+- Proxy: behind the Velocity plugin the backend needs nothing extra (captured); the proxy takes the voice port from the secret packet.
 
 ## Licence and clean room
 

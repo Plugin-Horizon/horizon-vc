@@ -3,24 +3,27 @@ use super::{Join, Out, State};
 
 /// The usages to register, with the operator level each needs to be seen (0: everyone; `test` also carries the `voicechat.admin` node). `test` needs
 /// `voicechat.admin`, checked when it runs.
-pub const USAGES: [(&str, u8); 18] = [
+pub const USAGES: [(&str, u8); 21] = [
     ("voicechat", 0),
     ("voicechat help", 0),
     ("voicechat test <player:player>", 1),
     ("voicechat invite <player:player>", 0),
     ("voicechat join <group:word> [password:text]", 0),
+    ("voicechat join <id:uuid> [password:text]", 0),
     ("voicechat leave", 0),
     ("horizonvc", 0),
     ("horizonvc help", 0),
     ("horizonvc test <player:player>", 1),
     ("horizonvc invite <player:player>", 0),
     ("horizonvc join <group:word> [password:text]", 0),
+    ("horizonvc join <id:uuid> [password:text]", 0),
     ("horizonvc leave", 0),
     ("hvc", 0),
     ("hvc help", 0),
     ("hvc test <player:player>", 1),
     ("hvc invite <player:player>", 0),
     ("hvc join <group:word> [password:text]", 0),
+    ("hvc join <id:uuid> [password:text]", 0),
     ("hvc leave", 0),
 ];
 
@@ -79,13 +82,14 @@ impl State {
         let sub = words.next().map(str::to_ascii_lowercase);
         let args: Vec<&str> = words.collect();
         let reply = |s: &str| Some(vec![s.to_string()]);
+        // The original answers every form, help included, with this line to a client that did not announce the mod.
+        if !self.voicers.contains_key(&player) {
+            return reply(&self.texts.command_needed());
+        }
         let sub = match sub.as_deref() {
             None | Some("help") => return Some(HELP.iter().map(|s| s.to_string()).collect()),
             Some(s) => s.to_string(),
         };
-        if !self.voicers.contains_key(&player) {
-            return reply(&self.texts.command_needed());
-        }
         match (sub.as_str(), &args[..]) {
             ("test", [name]) => {
                 if !self.may(player, "voicechat.admin") {

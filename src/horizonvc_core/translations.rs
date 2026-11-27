@@ -23,6 +23,11 @@ pub struct Texts {
     pub voicechat_not_compatible_message: String,
     /// Answer to a command that needs the mod on the client. Placeholder: name.
     pub voicechat_needed_for_command_message: String,
+    /// `%voicechat_installed%`, `%voicechat_not_installed%`, `%voicechat_disabled%` (public docs: empty by default,
+    /// set in `translations.properties`).
+    pub placeholder_installed: String,
+    pub placeholder_not_installed: String,
+    pub placeholder_disabled: String,
 }
 
 impl Default for Texts {
@@ -32,6 +37,9 @@ impl Default for Texts {
             rate_limit_kick_message: DEFAULT_RATE_LIMIT_KICK.into(),
             voicechat_not_compatible_message: DEFAULT_NOT_COMPATIBLE.into(),
             voicechat_needed_for_command_message: DEFAULT_COMMAND_NEEDED.into(),
+            placeholder_installed: String::new(),
+            placeholder_not_installed: String::new(),
+            placeholder_disabled: String::new(),
         }
     }
 }
@@ -66,6 +74,12 @@ impl Texts {
         let mut t = Texts::default();
         for (key, value) in properties::parse(text) {
             let value = shown(&value);
+            match key.as_str() {
+                "placeholder_installed" => t.placeholder_installed = value.clone(),
+                "placeholder_not_installed" => t.placeholder_not_installed = value.clone(),
+                "placeholder_disabled" => t.placeholder_disabled = value.clone(),
+                _ => {}
+            }
             if value.is_empty() {
                 continue;
             }
@@ -100,6 +114,17 @@ impl Texts {
         fill(&self.voicechat_not_compatible_message, &[MOD_VERSION, MOD_NAME])
     }
 
+    /// `%voicechat_<params>%`: the text for the player's state, `None` for another name.
+    pub fn placeholder(&self, params: &str, has_mod: bool, disabled: bool) -> Option<String> {
+        Some(match params {
+            "installed" if has_mod => self.placeholder_installed.clone(),
+            "not_installed" if !has_mod => self.placeholder_not_installed.clone(),
+            "disabled" if has_mod && disabled => self.placeholder_disabled.clone(),
+            "installed" | "not_installed" | "disabled" => String::new(),
+            _ => return None,
+        })
+    }
+
     pub fn command_needed(&self) -> String {
         fill(&self.voicechat_needed_for_command_message, &[MOD_NAME])
     }
@@ -108,6 +133,19 @@ impl Texts {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_voicechat_placeholders_follow_the_player_state() {
+        // Public docs: installed / not_installed / disabled, empty unless translations.properties sets them.
+        let t = Texts::parse("placeholder_installed=ON\nplaceholder_not_installed=OFF\nplaceholder_disabled=MUTED\n");
+        assert_eq!(t.placeholder("installed", true, false).as_deref(), Some("ON"));
+        assert_eq!(t.placeholder("installed", false, false).as_deref(), Some(""));
+        assert_eq!(t.placeholder("not_installed", false, false).as_deref(), Some("OFF"));
+        assert_eq!(t.placeholder("disabled", true, true).as_deref(), Some("MUTED"));
+        assert_eq!(t.placeholder("disabled", true, false).as_deref(), Some(""));
+        assert_eq!(Texts::default().placeholder("installed", true, false).as_deref(), Some(""));
+        assert_eq!(t.placeholder("other", true, false), None);
+    }
 
     #[test]
     fn fill_replaces_placeholders_in_order() {
